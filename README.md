@@ -46,6 +46,23 @@ or ships a secret in a bundled script:
 - run: npx @deepwissen/preflight manifest --fail-on warning
 ```
 
+## Manage skills
+
+```bash
+preflight list                 # compact list of installed skills
+preflight add ./some-skill     # stage → scan → install (only if clean)
+preflight add owner/repo       # same, from a GitHub repo (shallow clone)
+preflight add ./x --dry-run    # scan and report, install nothing
+preflight add ./x --force      # install despite findings
+preflight remove <name>        # preview what would be removed
+preflight remove <name> --yes  # move it to .preflight-trash/ (reversible)
+```
+
+`add` is a **security gate, not a copy**: a skill from anywhere is untrusted
+instructions plus code, so it's staged and scanned first and installed only if it's
+clean (gate defaults to `--fail-on warning`). `remove` never hard-deletes — it moves
+the skill to `.preflight-trash/`, which discovery ignores.
+
 ## Honest limits
 
 - **Footprint is static** — a skill's description loads into context on every prompt,
