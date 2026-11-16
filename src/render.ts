@@ -27,6 +27,8 @@ export function renderManifest(report: ManifestReport): string {
 
   const nameW = Math.max(6, ...rows.map((r) => (r.name ?? r.path).length));
   const scopeW = Math.max(14, ...rows.map((r) => r.scopeLabel.length));
+  const showWhere = rows.some((r) => r.origin);
+  const whereHdr = showWhere ? `${pad("WHERE", 8)}  ` : "";
   const L: string[] = [];
 
   L.push("Preflight · manifest");
@@ -34,13 +36,14 @@ export function renderManifest(report: ManifestReport): string {
   L.push("");
   L.push("AGENT LOADOUT — what your agent is carrying");
   L.push(
-    `  ${pad("SKILL", nameW)}  ${pad("SCOPE", scopeW)}  ${pad("ALWAYS", 7)}  ${pad("ON-DEMAND", 9)}  CHECK`
+    `  ${pad("SKILL", nameW)}  ${pad("SCOPE", scopeW)}  ${whereHdr}${pad("ALWAYS", 7)}  ${pad("ON-DEMAND", 9)}  CHECK`
   );
-  L.push(`  ${"─".repeat(nameW + scopeW + 7 + 9 + 6 + 12)}`);
+  L.push(`  ${"─".repeat(nameW + scopeW + (showWhere ? 10 : 0) + 7 + 9 + 6 + 12)}`);
   for (const r of rows) {
     const flag = r.errorCount ? " ⚠" : "  ";
+    const where = showWhere ? `${pad(r.origin ?? "", 8)}  ` : "";
     L.push(
-      `  ${pad((r.name ?? r.path) + flag, nameW + 2)}${pad(r.scopeLabel, scopeW)}  ${pad(
+      `  ${pad((r.name ?? r.path) + flag, nameW + 2)}${pad(r.scopeLabel, scopeW)}  ${where}${pad(
         tok(r.alwaysTokens) + "t",
         7
       )}  ${pad(tok(r.onDemandTokens) + "t", 9)}  ${checkCell(r)}`
@@ -89,6 +92,7 @@ export function renderList(report: ManifestReport): string {
   if (rows.length === 0) return "No agent skills installed.";
   const nameW = Math.max(4, ...rows.map((r) => (r.name ?? r.path).length));
   const scopeW = Math.max(10, ...rows.map((r) => r.scopeLabel.length));
+  const showWhere = rows.some((r) => r.origin);
   return rows
     .map((r) => {
       const check = r.errorCount
@@ -96,7 +100,8 @@ export function renderList(report: ManifestReport): string {
         : r.warnCount
           ? `⚠ ${r.warnCount}`
           : "✓";
-      return `  ${pad(r.name ?? r.path, nameW)}  ${pad(r.scopeLabel, scopeW)}  ${check}`;
+      const where = showWhere ? `${pad(r.origin ?? "", 8)}  ` : "";
+      return `  ${pad(r.name ?? r.path, nameW)}  ${pad(r.scopeLabel, scopeW)}  ${where}${check}`;
     })
     .join("\n");
 }

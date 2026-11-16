@@ -41,7 +41,7 @@ describe("planInstall", () => {
   it("plans every SKILL.md skill with scan result and destination", () => {
     writeSkill(work, "good", "---\nname: good\nallowed-tools: Read\n---\nSummarize.\n");
     writeSkill(work, "risky", "---\nname: risky\nallowed-tools: Bash(*)\n---\nDo it.\n");
-    const plan = planInstall(work, proj);
+    const plan = planInstall(work, join(proj, ".claude", "skills"));
     expect(plan.map((p) => p.name).sort()).toEqual(["good", "risky"]);
     expect(plan.find((p) => p.name === "risky")!.row.errorCount).toBeGreaterThan(0);
     expect(plan.every((p) => !p.exists)).toBe(true);
@@ -53,13 +53,13 @@ describe("installItem", () => {
     writeSkill(work, "deployer", "---\nname: deployer\nallowed-tools: Read\n---\nGo.\n", {
       "run.sh": "#!/bin/sh\necho hi\n",
     });
-    const [item] = planInstall(work, proj);
+    const [item] = planInstall(work, join(proj, ".claude", "skills"));
     installItem(item, {});
     expect(existsSync(join(proj, ".claude/skills/deployer/SKILL.md"))).toBe(true);
     expect(existsSync(join(proj, ".claude/skills/deployer/scripts/run.sh"))).toBe(true);
 
     // second install without overwrite is refused
-    const [again] = planInstall(work, proj);
+    const [again] = planInstall(work, join(proj, ".claude", "skills"));
     expect(again.exists).toBe(true);
     expect(() => installItem(again, {})).toThrow(/already installed/);
     expect(() => installItem(again, { overwrite: true })).not.toThrow();
@@ -69,7 +69,7 @@ describe("installItem", () => {
 describe("removeSkill", () => {
   it("previews without --yes, then moves to .preflight-trash with --yes", () => {
     writeSkill(work, "tmp-skill", "---\nname: tmp-skill\nallowed-tools: Read\n---\nGo.\n");
-    installItem(planInstall(work, proj)[0], {});
+    installItem(planInstall(work, join(proj, ".claude", "skills"))[0], {});
     const skillPath = join(proj, ".claude/skills/tmp-skill");
     expect(existsSync(skillPath)).toBe(true);
 

@@ -4,6 +4,7 @@ import { extractSkillScope, type SkillScope } from "@deepwissen/preflight-core";
 import { findSkillFiles } from "./discover.js";
 import { scanSkill, type Finding } from "./scan.js";
 import { enumerateBundle, type Bundle } from "./bundle.js";
+import type { Scope, ScopeName } from "./scopes.js";
 
 /** Static token footprint ~ chars/4. Honest approximation for a per-file number;
  *  the real cost is conditional (descriptions load always, bodies on demand). */
@@ -53,6 +54,7 @@ export interface SkillRow {
   bundle: Bundle; // scripts the skill ships, each scanned
   errorCount: number; // across the skill AND its bundle
   warnCount: number;
+  origin?: ScopeName; // which scope it came from (set in combined/--all views)
 }
 
 /** Every finding for a skill — its own plus each bundled script's — tagged with the
@@ -135,11 +137,29 @@ export function exitForReport(report: ManifestReport, failOn: FailOn): number {
   return reportFindings(report).some((f) => RANK[f.severity] >= threshold) ? 1 : 0;
 }
 
-/** Build the agent-skill manifest for a project directory. */
-export function buildManifest(root: string): ManifestReport {
-  const rows = findSkillFiles(root).map((rel) => buildRow(join(root, rel), rel));
+/** Build the agent-skill manifest for a directory (optionally skipping dirs). */
+export function buildManifest(root: string, skip: Iterable<string> = []): ManifestReport {
+  const rows = findSkillFiles(root, skip).map((rel) => buildRow(join(root, rel), rel));
   return {
     root,
+    rows,
+    alwaysTotal: rows.reduce((n, r) => n + r.alwaysTokens, 0),
+    onDemandTotal: rows.reduce((n, r) => n + r.onDemandTokens, 0),
+  };
+}
+
+/** Build a manifest across one or more scopes. With multiple scopes each row is
+ *  tagged with its origin (project/user) so the view can show a WHERE column. */
+export function buildScopes(scopes: Scope[]): ManifestReport {
+  const multi = scopes.length > 1;
+  const rows: SkillRow[] = [];
+  for (const s of scopes) {
+    for (const row of buildManifest(s.scanRoot, s.skip).rows) {
+      rows.push(multi ? { ...row, origin: s.name } : row);
+    }
+  }
+  return {
+    root: multi ? scopes.map((s) => s.name).join(" + ") : scopes[0].scanRoot,
     rows,
     alwaysTotal: rows.reduce((n, r) => n + r.alwaysTokens, 0),
     onDemandTotal: rows.reduce((n, r) => n + r.onDemandTokens, 0),

@@ -62,9 +62,8 @@ export interface InstallItem {
 }
 
 /** Plan what `add` would install: every SKILL.md-based skill in the staging dir,
- *  scanned, with its destination and collision status. */
-export function planInstall(stagingDir: string, root: string): InstallItem[] {
-  const skillsDir = join(root, ".claude", "skills");
+ *  scanned, with its destination (under `skillsDir`) and collision status. */
+export function planInstall(stagingDir: string, skillsDir: string): InstallItem[] {
   const items: InstallItem[] = [];
   for (const rel of findSkillFiles(stagingDir)) {
     if (!/(^|\/)skill\.md$/i.test(rel)) continue; // dir-based skills only (not lone commands)
@@ -109,8 +108,12 @@ export type RemovePlan =
  * agents dir can never be deleted), and moves it to .preflight-trash/ rather than
  * hard-deleting. Without `yes` it reports what would happen and changes nothing.
  */
-export function removeSkill(root: string, name: string, opts: { yes?: boolean }): RemovePlan {
-  const res = resolveSkill(root, name);
+export function removeSkill(
+  root: string,
+  name: string,
+  opts: { yes?: boolean; skip?: string[] }
+): RemovePlan {
+  const res = resolveSkill(root, name, opts.skip ?? []);
   if ("error" in res) return { error: res.error };
   if (!/(^|\/)skill\.md$/i.test(res.absPath)) {
     return { error: `remove supports SKILL.md skills only (got ${res.displayPath})` };

@@ -3,13 +3,14 @@ import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync, existsSync } from "node:fs";
 import {
-  buildManifest,
+  buildScopes,
   buildRow,
   exitForReport,
   type FailOn,
   type ManifestReport,
 } from "./manifest.js";
-import { resolveSkill } from "./discover.js";
+import { projectScope, userScope, type Scope } from "./scopes.js";
+import { resolveSkill, type Resolved } from "./discover.js";
 import {
   renderManifest,
   renderJson,
@@ -21,6 +22,16 @@ import { renderManifestSarif } from "./sarif.js";
 import { stageSource, planInstall, installItem, removeSkill } from "./install.js";
 
 const FAIL_ON: readonly string[] = ["error", "warning", "any"];
+
+/** Scopes to act on, honoring --global / --all and an optional explicit project path. */
+function scopesFromFlags(
+  flags: { global?: unknown; all?: unknown },
+  projectRoot: string
+): Scope[] {
+  if (flags.all) return [projectScope(projectRoot), userScope()];
+  if (flags.global) return [userScope()];
+  return [projectScope(projectRoot)];
+}
 
 const VERSION = "0.1.0"; // keep in sync with package.json
 
@@ -55,6 +66,11 @@ Usage:
                               and install it only if it's clean (or you --force).
   preflight remove <name>     Move an installed skill to .preflight-trash/ (needs --yes).
 
+Scope (list/manifest/check/add/remove):
+  (default)                   project skills — ./.claude/skills
+  --global                    personal skills — ~/.claude/skills
+  --all                       (list/manifest) both, with a WHERE column
+
 Options:
   --json                      Machine-readable output
   --sarif                     SARIF 2.1.0 → GitHub code scanning annotations
@@ -79,6 +95,8 @@ function runManifest(argv: string[], out: (s: string) => void, err: (s: string) 
       options: {
         json: { type: "boolean" },
         sarif: { type: "boolean" },
+        global: { type: "boolean" },
+        all: { type: "boolean" },
         "fail-on": { type: "string", default: "error" },
       },
     });
@@ -95,13 +113,13 @@ function runManifest(argv: string[], out: (s: string) => void, err: (s: string) 
     return 2;
   }
 
-  const root = resolve(positionals[0] ?? ".");
-  if (!existsSync(root)) {
-    err(`preflight: no such path: ${root}\n`);
+  const projectRoot = resolve(positionals[0] ?? ".");
+  if (!values.global && !existsSync(projectRoot)) {
+    err(`preflight: no such path: ${projectRoot}\n`);
     return 2;
   }
 
-  const report = buildManifest(root);
+  const report = buildScopes(scopesFromFlags(values, projectRoot));
   out(
     (values.sarif
       ? renderManifestSarif(report)
@@ -122,6 +140,8 @@ function runCheck(argv: string[], out: (s: string) => void, err: (s: string) => 
       options: {
         json: { type: "boolean" },
         sarif: { type: "boolean" },
+        global: { type: "boolean" },
+        all: { type: "boolean" },
         "fail-on": { type: "string", default: "error" },
       },
     });
@@ -143,14 +163,24 @@ function runCheck(argv: string[], out: (s: string) => void, err: (s: string) => 
     err("preflight check: name a skill — preflight check <name|path>\n");
     return 2;
   }
-  const res = resolveSkill(resolve("."), arg);
-  if ("error" in res) {
-    err(`preflight: ${res.error}\n`);
-    for (const c of res.candidates ?? []) err(`    - ${c}\n`);
+
+  let resolved: Resolved | null = null;
+  let lastErr: { error: string; candidates?: string[] } | null = null;
+  for (const s of scopesFromFlags(values, resolve("."))) {
+    const r = resolveSkill(s.scanRoot, arg, s.skip);
+    if ("error" in r) lastErr = r;
+    else {
+      resolved = r;
+      break;
+    }
+  }
+  if (!resolved) {
+    err(`preflight: ${lastErr?.error ?? `no skill matching "${arg}"`}\n`);
+    for (const c of lastErr?.candidates ?? []) err(`    - ${c}\n`);
     return 2;
   }
 
-  const row = buildRow(res.absPath, res.displayPath);
+  const row = buildRow(resolved.absPath, resolved.displayPath);
   const report: ManifestReport = {
     root: ".",
     rows: [row],
@@ -168,19 +198,26 @@ function runCheck(argv: string[], out: (s: string) => void, err: (s: string) => 
 }
 
 function runList(argv: string[], out: (s: string) => void, err: (s: string) => void): number {
+  let values: Record<string, unknown>;
   let positionals: string[];
   try {
-    positionals = parseArgs({ args: argv, allowPositionals: true, options: {} }).positionals;
+    const parsed = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: { global: { type: "boolean" }, all: { type: "boolean" } },
+    });
+    values = parsed.values;
+    positionals = parsed.positionals;
   } catch (e) {
     err(`preflight: ${(e as Error).message}\n`);
     return 2;
   }
-  const root = resolve(positionals[0] ?? ".");
-  if (!existsSync(root)) {
-    err(`preflight: no such path: ${root}\n`);
+  const projectRoot = resolve(positionals[0] ?? ".");
+  if (!values.global && !existsSync(projectRoot)) {
+    err(`preflight: no such path: ${projectRoot}\n`);
     return 2;
   }
-  out(renderList(buildManifest(root)) + "\n");
+  out(renderList(buildScopes(scopesFromFlags(values, projectRoot))) + "\n");
   return 0;
 }
 
@@ -195,6 +232,7 @@ function runAdd(argv: string[], out: (s: string) => void, err: (s: string) => vo
         force: { type: "boolean" },
         overwrite: { type: "boolean" },
         "dry-run": { type: "boolean" },
+        global: { type: "boolean" },
         "fail-on": { type: "string", default: "warning" },
       },
     });
@@ -224,9 +262,9 @@ function runAdd(argv: string[], out: (s: string) => void, err: (s: string) => vo
     return 2;
   }
 
+  const target = values.global ? userScope() : projectScope();
   try {
-    const root = resolve(".");
-    const plan = planInstall(staging.dir, root);
+    const plan = planInstall(staging.dir, target.skillsDir);
     if (plan.length === 0) {
       err(`preflight: no skills (SKILL.md) found in "${src}"\n`);
       return 2;
@@ -258,7 +296,7 @@ function runAdd(argv: string[], out: (s: string) => void, err: (s: string) => vo
     }
     for (const item of plan) installItem(item, { overwrite: Boolean(values.overwrite) });
     out(
-      `\ninstalled ${plan.length} skill(s) into .claude/skills/: ${plan
+      `\ninstalled ${plan.length} skill(s) into ${target.name} scope (${target.skillsDir}): ${plan
         .map((p) => p.name)
         .join(", ")}\n`
     );
@@ -275,7 +313,7 @@ function runRemove(argv: string[], out: (s: string) => void, err: (s: string) =>
     const parsed = parseArgs({
       args: argv,
       allowPositionals: true,
-      options: { yes: { type: "boolean" } },
+      options: { yes: { type: "boolean" }, global: { type: "boolean" } },
     });
     values = parsed.values;
     positionals = parsed.positionals;
@@ -288,7 +326,8 @@ function runRemove(argv: string[], out: (s: string) => void, err: (s: string) =>
     err("preflight remove: name a skill — preflight remove <name>\n");
     return 2;
   }
-  const res = removeSkill(resolve("."), name, { yes: Boolean(values.yes) });
+  const target = values.global ? userScope() : projectScope();
+  const res = removeSkill(target.scanRoot, name, { yes: Boolean(values.yes), skip: target.skip });
   if ("error" in res) {
     err(`preflight: ${res.error}\n`);
     return 2;

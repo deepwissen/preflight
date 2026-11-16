@@ -20,7 +20,8 @@ const SKIP_DIRS = new Set([
  * Classification is delegated to the engine's isSkillScopeFile so discovery and
  * scope extraction never disagree about what counts as a skill.
  */
-export function findSkillFiles(root: string): string[] {
+export function findSkillFiles(root: string, extraSkip: Iterable<string> = []): string[] {
+  const skip = new Set([...SKIP_DIRS, ...extraSkip]);
   const out: string[] = [];
   const walk = (dir: string): void => {
     let entries: string[];
@@ -38,7 +39,7 @@ export function findSkillFiles(root: string): string[] {
         continue;
       }
       if (s.isDirectory()) {
-        if (!SKIP_DIRS.has(name)) walk(abs);
+        if (!skip.has(name)) walk(abs);
       } else {
         const rel = relative(root, abs);
         if (isSkillScopeFile(rel)) out.push(rel);
@@ -66,7 +67,8 @@ function relOrAbs(root: string, abs: string): string {
  */
 export function resolveSkill(
   root: string,
-  arg: string
+  arg: string,
+  extraSkip: Iterable<string> = []
 ): Resolved | { error: string; candidates?: string[] } {
   // 1. A direct path (relative to cwd) to a skill file or a skill directory.
   const direct = resolve(arg);
@@ -83,7 +85,7 @@ export function resolveSkill(
 
   // 2. An identifier: match declared name / directory / filename.
   const matches: Resolved[] = [];
-  for (const rel of findSkillFiles(root)) {
+  for (const rel of findSkillFiles(root, extraSkip)) {
     const abs = join(root, rel);
     const name = extractSkillScope(rel, readFileSync(abs, "utf8")).name;
     const dir = basename(dirname(rel));
