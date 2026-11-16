@@ -2,9 +2,18 @@ import { parseArgs } from "node:util";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync, existsSync } from "node:fs";
-import { buildManifest, buildRow } from "./manifest.js";
+import {
+  buildManifest,
+  buildRow,
+  exitForReport,
+  type FailOn,
+  type ManifestReport,
+} from "./manifest.js";
 import { resolveSkill } from "./discover.js";
 import { renderManifest, renderJson, renderCheck, renderCheckJson } from "./render.js";
+import { renderManifestSarif } from "./sarif.js";
+
+const FAIL_ON: readonly string[] = ["error", "warning", "any"];
 
 const VERSION = "0.1.0"; // keep in sync with package.json
 
@@ -38,6 +47,8 @@ Usage:
 
 Options:
   --json                      Machine-readable output
+  --sarif                     SARIF 2.1.0 → GitHub code scanning annotations
+  --fail-on <level>           Exit non-zero on: error (default) | warning | any
   -v, --version               Print version
   -h, --help                  Print help
 
@@ -51,12 +62,22 @@ function runManifest(argv: string[], out: (s: string) => void, err: (s: string) 
     const parsed = parseArgs({
       args: argv,
       allowPositionals: true,
-      options: { json: { type: "boolean" } },
+      options: {
+        json: { type: "boolean" },
+        sarif: { type: "boolean" },
+        "fail-on": { type: "string", default: "error" },
+      },
     });
     values = parsed.values;
     positionals = parsed.positionals;
   } catch (e) {
     err(`preflight: ${(e as Error).message}\n`);
+    return 2;
+  }
+
+  const failOn = String(values["fail-on"]);
+  if (!FAIL_ON.includes(failOn)) {
+    err(`preflight: --fail-on must be one of ${FAIL_ON.join(", ")}\n`);
     return 2;
   }
 
@@ -67,10 +88,14 @@ function runManifest(argv: string[], out: (s: string) => void, err: (s: string) 
   }
 
   const report = buildManifest(root);
-  out((values.json ? renderJson(report) : renderManifest(report)) + "\n");
-  // Inventory is informational; surface a nonzero exit only when a skill has an
-  // error-level finding, so it can double as a lightweight gate in CI.
-  return report.rows.some((r) => r.errorCount > 0) ? 1 : 0;
+  out(
+    (values.sarif
+      ? renderManifestSarif(report)
+      : values.json
+        ? renderJson(report)
+        : renderManifest(report)) + "\n"
+  );
+  return exitForReport(report, failOn as FailOn);
 }
 
 function runCheck(argv: string[], out: (s: string) => void, err: (s: string) => void): number {
@@ -80,12 +105,22 @@ function runCheck(argv: string[], out: (s: string) => void, err: (s: string) => 
     const parsed = parseArgs({
       args: argv,
       allowPositionals: true,
-      options: { json: { type: "boolean" } },
+      options: {
+        json: { type: "boolean" },
+        sarif: { type: "boolean" },
+        "fail-on": { type: "string", default: "error" },
+      },
     });
     values = parsed.values;
     positionals = parsed.positionals;
   } catch (e) {
     err(`preflight: ${(e as Error).message}\n`);
+    return 2;
+  }
+
+  const failOn = String(values["fail-on"]);
+  if (!FAIL_ON.includes(failOn)) {
+    err(`preflight: --fail-on must be one of ${FAIL_ON.join(", ")}\n`);
     return 2;
   }
 
@@ -102,8 +137,20 @@ function runCheck(argv: string[], out: (s: string) => void, err: (s: string) => 
   }
 
   const row = buildRow(res.absPath, res.displayPath);
-  out((values.json ? renderCheckJson(row) : renderCheck(row)) + "\n");
-  return row.errorCount > 0 ? 1 : 0;
+  const report: ManifestReport = {
+    root: ".",
+    rows: [row],
+    alwaysTotal: row.alwaysTokens,
+    onDemandTotal: row.onDemandTokens,
+  };
+  out(
+    (values.sarif
+      ? renderManifestSarif(report)
+      : values.json
+        ? renderCheckJson(row)
+        : renderCheck(row)) + "\n"
+  );
+  return exitForReport(report, failOn as FailOn);
 }
 
 export function run(

@@ -21,13 +21,30 @@ Inventory every skill your agent carries, with its **declared scope**, **static
 token footprint**, and a **scan** of each:
 
 ```bash
-preflight manifest            # scan the current project
-preflight manifest ./path     # scan a specific directory
-preflight manifest --json     # machine-readable
+preflight manifest                     # scan the current project
+preflight manifest ./path              # scan a specific directory
+preflight manifest --json              # machine-readable
+preflight manifest --sarif             # SARIF 2.1.0 → GitHub code scanning
+preflight manifest --fail-on warning   # exit 1 on warning or worse
 ```
 
-Exit code is `0` clean, `1` if any skill has an error-level finding (e.g. over-broad
-`allowed-tools`), so it can double as a lightweight CI gate.
+Exit code is `0` clean, `1` if any finding meets the `--fail-on` threshold
+(`error` by default; `warning` or `any` to be stricter) — so it doubles as a CI gate.
+
+## Gate skills in CI
+
+Your CI already scans dependencies and secrets. Gate the agent skills your team
+commits the same way — fail the PR if a committed skill is over-broad, injected,
+or ships a secret in a bundled script:
+
+```yaml
+# .github/workflows/skills.yml
+- run: npx @deepwissen/preflight manifest --sarif > skills.sarif
+- uses: github/codeql-action/upload-sarif@v3
+  with: { sarif_file: skills.sarif }
+# or hard-fail the PR:
+- run: npx @deepwissen/preflight manifest --fail-on warning
+```
 
 ## Honest limits
 

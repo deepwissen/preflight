@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { extractSkillScope, type SkillScope } from "@deepwissen/preflight-core";
 import { findSkillFiles } from "./discover.js";
 import { scanSkill, type Finding } from "./scan.js";
@@ -93,6 +93,46 @@ export function buildRow(absPath: string, displayPath: string): SkillRow {
     errorCount: all.filter((f) => f.severity === "error").length,
     warnCount: all.filter((f) => f.severity === "warning").length,
   };
+}
+
+export type FailOn = "error" | "warning" | "any";
+const RANK: Record<Finding["severity"], number> = { info: 1, warning: 2, error: 3 };
+
+export interface LocatedFinding {
+  file: string; // repo-root-relative
+  rule: string;
+  severity: Finding["severity"];
+  message: string;
+  line?: number;
+}
+
+/** Every finding across the report, each with a repo-root-relative path — bundled
+ *  scripts are re-rooted from skill-dir-relative to repo-relative for reporting. */
+export function reportFindings(report: ManifestReport): LocatedFinding[] {
+  const out: LocatedFinding[] = [];
+  for (const r of report.rows) {
+    for (const f of r.findings) {
+      out.push({ file: r.path, rule: f.rule, severity: f.severity, message: f.message, line: f.line });
+    }
+    const dir = dirname(r.path);
+    for (const sc of r.bundle.scripts) {
+      const uri = dir === "." ? sc.path : `${dir}/${sc.path}`;
+      for (const f of sc.findings) {
+        out.push({ file: uri, rule: f.rule, severity: f.severity, message: f.message, line: f.line });
+      }
+    }
+  }
+  return out;
+}
+
+export function failThreshold(failOn: FailOn): number {
+  return failOn === "any" ? 1 : failOn === "warning" ? 2 : 3;
+}
+
+/** Exit 1 when any finding meets/exceeds the --fail-on threshold, else 0. */
+export function exitForReport(report: ManifestReport, failOn: FailOn): number {
+  const threshold = failThreshold(failOn);
+  return reportFindings(report).some((f) => RANK[f.severity] >= threshold) ? 1 : 0;
 }
 
 /** Build the agent-skill manifest for a project directory. */
