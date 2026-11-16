@@ -1,7 +1,11 @@
-import type { ManifestReport, SkillRow } from "./manifest.js";
+import { flatFindings, type ManifestReport, type SkillRow } from "./manifest.js";
 
 function tok(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+}
+
+function bytes(n: number): string {
+  return n >= 1024 ? `${(n / 1024).toFixed(1)} kB` : `${n} B`;
 }
 
 function pad(s: string, w: number): string {
@@ -50,21 +54,22 @@ export function renderManifest(report: ManifestReport): string {
   );
   L.push(`  full-load footprint  ~${tok(report.onDemandTotal)}t if every body loads`);
 
-  const flagged = rows.filter((r) => r.findings.length > 0);
+  const flagged = rows.filter((r) => flatFindings(r).length > 0);
   if (flagged.length) {
     L.push("");
     L.push(`NEEDS ATTENTION  (${flagged.length})`);
     for (const r of flagged) {
       L.push("");
       L.push(`  ${r.errorCount ? "✗" : "⚠"} ${r.name ?? r.path}      ${r.path}`);
-      for (const f of r.findings) {
-        L.push(`     • [${f.severity}] ${f.message}${f.line ? ` (line ${f.line})` : ""}`);
+      for (const { file, finding: f } of flatFindings(r)) {
+        const where = file !== r.path ? `${file}: ` : "";
+        L.push(`     • [${f.severity}] ${where}${f.message}${f.line ? ` (line ${f.line})` : ""}`);
       }
       L.push(`     → preflight check ${r.name ?? r.path}`);
     }
   }
 
-  const clean = rows.filter((r) => r.findings.length === 0).map((r) => r.name ?? r.path);
+  const clean = rows.filter((r) => flatFindings(r).length === 0).map((r) => r.name ?? r.path);
   if (clean.length) {
     L.push("");
     L.push(`CLEAN  (${clean.length})  ${clean.join(" · ")}`);
@@ -107,17 +112,35 @@ export function renderCheck(row: SkillRow): string {
   L.push(`  ~${tok(row.alwaysTokens)}t always     name + description, loaded every prompt`);
   L.push(`  ~${tok(row.onDemandTokens)}t on demand  full body, loaded when the skill is invoked`);
 
+  const b = row.bundle;
+  if (b.scripts.length || b.otherFiles) {
+    L.push("");
+    const other = b.otherFiles ? `, ${b.otherFiles} other file${b.otherFiles > 1 ? "s" : ""}` : "";
+    L.push(`BUNDLED FILES (${b.scripts.length} script${b.scripts.length === 1 ? "" : "s"}${other})`);
+    for (const sc of b.scripts) {
+      const errs = sc.findings.filter((f) => f.severity === "error").length;
+      const st = errs
+        ? `✗ ${sc.findings.length} issue${sc.findings.length > 1 ? "s" : ""}`
+        : sc.findings.length
+          ? `⚠ ${sc.findings.length} issue${sc.findings.length > 1 ? "s" : ""}`
+          : "✓ clean";
+      L.push(`  ${pad(sc.path, 30)}${pad(bytes(sc.bytes), 9)} ${st}`);
+    }
+  }
+
+  const flat = flatFindings(row);
   L.push("");
-  if (row.findings.length === 0) {
+  if (flat.length === 0) {
     L.push("FINDINGS (0)");
     L.push("  ✓ nothing flagged — but a clean scan means nothing was found, not that");
     L.push("    nothing is there; scope above is declared-only.");
   } else {
-    L.push(`FINDINGS (${row.findings.length})`);
-    for (const f of row.findings) {
+    L.push(`FINDINGS (${flat.length})`);
+    for (const { file, finding: f } of flat) {
       const mark = f.severity === "error" ? "✗" : f.severity === "warning" ? "⚠" : "ℹ";
+      const where = file !== row.path ? ` in ${file}` : "";
       L.push("");
-      L.push(`  ${mark} [${f.severity}] ${f.rule}${f.line ? `  (line ${f.line})` : ""}`);
+      L.push(`  ${mark} [${f.severity}] ${f.rule}${f.line ? `  (line ${f.line})` : ""}${where}`);
       L.push(`    ${f.message}`);
       if (f.suggestion) L.push(`    → ${f.suggestion}`);
     }
@@ -143,6 +166,7 @@ export function renderCheckJson(row: SkillRow): string {
       alwaysTokens: row.alwaysTokens,
       onDemandTokens: row.onDemandTokens,
       findings: row.findings,
+      bundle: row.bundle,
     },
     null,
     2
@@ -171,6 +195,7 @@ export function renderJson(report: ManifestReport): string {
         alwaysTokens: r.alwaysTokens,
         onDemandTokens: r.onDemandTokens,
         findings: r.findings,
+        bundle: r.bundle,
       })),
     },
     null,

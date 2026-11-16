@@ -2,6 +2,7 @@ import {
   scanSecrets,
   scanInstructionIntegrity,
   scanSkillScope,
+  detectTraps,
   type ContextSnapshot,
   type FileInfo,
 } from "@deepwissen/preflight-core";
@@ -31,10 +32,10 @@ function emptySnapshot(): ContextSnapshot {
   };
 }
 
-function fileInfo(path: string, content: string): FileInfo {
+function fileInfo(path: string, content: string, languageId = "markdown"): FileInfo {
   return {
     path,
-    languageId: "markdown",
+    languageId,
     lineCount: content.split("\n").length,
     charCount: content.length,
     isActive: true,
@@ -83,6 +84,42 @@ export function scanSkill(path: string, content: string): Finding[] {
       message: i.description,
       line: i.lineNumber,
       suggestion: i.suggestion,
+    });
+  }
+  return out;
+}
+
+function lineFrom(text: string): number | undefined {
+  const m = text.match(/\bline (\d+)\b/);
+  return m ? Number(m[1]) : undefined;
+}
+
+/**
+ * Scan a bundled script a skill ships (not prose) — hardcoded secrets and
+ * trap-file patterns (unsafe deserialization etc.). Instruction-integrity and
+ * scope checks do NOT apply: this is code, not an instruction surface.
+ */
+export function scanCode(path: string, content: string, languageId: string): Finding[] {
+  const snap = emptySnapshot();
+  snap.activeFile = fileInfo(path, content, languageId);
+
+  const out: Finding[] = [];
+  for (const f of scanSecrets(snap, {}).secretFindings ?? []) {
+    out.push({
+      severity: f.severity,
+      rule: f.ruleId,
+      message: f.description,
+      line: f.lineNumber,
+      suggestion: f.suggestion,
+    });
+  }
+  for (const w of detectTraps(snap, {}).wastePatterns ?? []) {
+    out.push({
+      severity: w.severity === "warning" ? "warning" : "info",
+      rule: w.ruleId,
+      message: w.description,
+      line: lineFrom(w.description),
+      suggestion: w.suggestion,
     });
   }
   return out;

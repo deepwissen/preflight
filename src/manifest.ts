@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { extractSkillScope, type SkillScope } from "@deepwissen/preflight-core";
 import { findSkillFiles } from "./discover.js";
 import { scanSkill, type Finding } from "./scan.js";
+import { enumerateBundle, type Bundle } from "./bundle.js";
 
 /** Static token footprint ~ chars/4. Honest approximation for a per-file number;
  *  the real cost is conditional (descriptions load always, bodies on demand). */
@@ -48,9 +49,20 @@ export interface SkillRow {
   scopeLabel: string;
   alwaysTokens: number;
   onDemandTokens: number;
-  findings: Finding[];
-  errorCount: number;
+  findings: Finding[]; // the SKILL.md's own findings
+  bundle: Bundle; // scripts the skill ships, each scanned
+  errorCount: number; // across the skill AND its bundle
   warnCount: number;
+}
+
+/** Every finding for a skill — its own plus each bundled script's — tagged with the
+ *  file it came from (the skill path, or a bundled script's relative path). */
+export function flatFindings(row: SkillRow): Array<{ file: string; finding: Finding }> {
+  const out = row.findings.map((finding) => ({ file: row.path, finding }));
+  for (const sc of row.bundle.scripts) {
+    for (const finding of sc.findings) out.push({ file: sc.path, finding });
+  }
+  return out;
 }
 
 export interface ManifestReport {
@@ -67,6 +79,8 @@ export function buildRow(absPath: string, displayPath: string): SkillRow {
   const content = readFileSync(absPath, "utf8");
   const scope = extractSkillScope(displayPath, content);
   const findings = scanSkill(displayPath, content);
+  const bundle = enumerateBundle(absPath);
+  const all = [...findings, ...bundle.scripts.flatMap((s) => s.findings)];
   return {
     path: displayPath,
     name: scope.name,
@@ -75,8 +89,9 @@ export function buildRow(absPath: string, displayPath: string): SkillRow {
     alwaysTokens: estTokens(`${scope.name ?? ""} ${scope.description ?? ""}`.trim()),
     onDemandTokens: estTokens(content),
     findings,
-    errorCount: findings.filter((f) => f.severity === "error").length,
-    warnCount: findings.filter((f) => f.severity === "warning").length,
+    bundle,
+    errorCount: all.filter((f) => f.severity === "error").length,
+    warnCount: all.filter((f) => f.severity === "warning").length,
   };
 }
 
