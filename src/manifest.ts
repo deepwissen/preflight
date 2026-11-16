@@ -60,26 +60,29 @@ export interface ManifestReport {
   onDemandTotal: number;
 }
 
+/** Build one skill's row: scope + footprint + scan. `displayPath` is what's shown
+ *  and what the engine classifies by (must end in SKILL.md or sit under
+ *  .claude/{skills,commands,agents}); `absPath` is where the content is read from. */
+export function buildRow(absPath: string, displayPath: string): SkillRow {
+  const content = readFileSync(absPath, "utf8");
+  const scope = extractSkillScope(displayPath, content);
+  const findings = scanSkill(displayPath, content);
+  return {
+    path: displayPath,
+    name: scope.name,
+    scope,
+    scopeLabel: scopeLabel(scope),
+    alwaysTokens: estTokens(`${scope.name ?? ""} ${scope.description ?? ""}`.trim()),
+    onDemandTokens: estTokens(content),
+    findings,
+    errorCount: findings.filter((f) => f.severity === "error").length,
+    warnCount: findings.filter((f) => f.severity === "warning").length,
+  };
+}
+
 /** Build the agent-skill manifest for a project directory. */
 export function buildManifest(root: string): ManifestReport {
-  const rows: SkillRow[] = [];
-  for (const rel of findSkillFiles(root)) {
-    const content = readFileSync(join(root, rel), "utf8");
-    const scope = extractSkillScope(rel, content);
-    const findings = scanSkill(rel, content);
-    const always = estTokens(`${scope.name ?? ""} ${scope.description ?? ""}`.trim());
-    rows.push({
-      path: rel,
-      name: scope.name,
-      scope,
-      scopeLabel: scopeLabel(scope),
-      alwaysTokens: always,
-      onDemandTokens: estTokens(content),
-      findings,
-      errorCount: findings.filter((f) => f.severity === "error").length,
-      warnCount: findings.filter((f) => f.severity === "warning").length,
-    });
-  }
+  const rows = findSkillFiles(root).map((rel) => buildRow(join(root, rel), rel));
   return {
     root,
     rows,

@@ -2,8 +2,9 @@ import { parseArgs } from "node:util";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync, existsSync } from "node:fs";
-import { buildManifest } from "./manifest.js";
-import { renderManifest, renderJson } from "./render.js";
+import { buildManifest, buildRow } from "./manifest.js";
+import { resolveSkill } from "./discover.js";
+import { renderManifest, renderJson, renderCheck, renderCheckJson } from "./render.js";
 
 const VERSION = "0.1.0"; // keep in sync with package.json
 
@@ -32,6 +33,8 @@ const HELP = `preflight — get your AI agent flight-ready.
 Usage:
   preflight manifest [path]   Inventory the skills your agent carries — scope,
                               static token footprint, and a scan of each.
+  preflight check <skill>     Drill into one skill (by name or path): full scope,
+                              footprint, and every finding with its fix.
 
 Options:
   --json                      Machine-readable output
@@ -70,6 +73,39 @@ function runManifest(argv: string[], out: (s: string) => void, err: (s: string) 
   return report.rows.some((r) => r.errorCount > 0) ? 1 : 0;
 }
 
+function runCheck(argv: string[], out: (s: string) => void, err: (s: string) => void): number {
+  let values: Record<string, unknown>;
+  let positionals: string[];
+  try {
+    const parsed = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: { json: { type: "boolean" } },
+    });
+    values = parsed.values;
+    positionals = parsed.positionals;
+  } catch (e) {
+    err(`preflight: ${(e as Error).message}\n`);
+    return 2;
+  }
+
+  const arg = positionals[0];
+  if (!arg) {
+    err("preflight check: name a skill — preflight check <name|path>\n");
+    return 2;
+  }
+  const res = resolveSkill(resolve("."), arg);
+  if ("error" in res) {
+    err(`preflight: ${res.error}\n`);
+    for (const c of res.candidates ?? []) err(`    - ${c}\n`);
+    return 2;
+  }
+
+  const row = buildRow(res.absPath, res.displayPath);
+  out((values.json ? renderCheckJson(row) : renderCheck(row)) + "\n");
+  return row.errorCount > 0 ? 1 : 0;
+}
+
 export function run(
   argv: string[],
   out: (s: string) => void = (s) => void process.stdout.write(s),
@@ -86,6 +122,7 @@ export function run(
     return 0;
   }
   if (sub === "manifest") return runManifest(argv.slice(1), out, err);
+  if (sub === "check") return runCheck(argv.slice(1), out, err);
   err(`preflight: unknown command "${sub}" (try: preflight --help)\n`);
   return 2;
 }

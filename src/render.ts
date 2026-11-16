@@ -78,6 +78,77 @@ export function renderManifest(report: ManifestReport): string {
   return L.join("\n");
 }
 
+/** Render a single skill's detailed check view (the manifest drill-in). */
+export function renderCheck(row: SkillRow): string {
+  const s = row.scope;
+  const L: string[] = [];
+  L.push(`Preflight · check — ${row.name ?? row.path}`);
+  L.push(row.path);
+  L.push("");
+  L.push(`  ${row.name ?? row.path}${s.description ? ` — ${s.description}` : ""}`);
+
+  L.push("");
+  L.push("SCOPE (declared)");
+  if (!s.declaredTools) {
+    L.push("  (no allowed-tools — may inherit the session's full tool access)");
+  } else {
+    L.push(`  tools:    ${s.tools.map((t) => t.raw).join(", ") || "(none)"}`);
+    if (s.broad) {
+      L.push(`  ⚠ broad:  ${s.broadGrants.join(", ")}  — unrestricted; can act beyond this skill's job`);
+    }
+  }
+  if (s.mcpServers.length) L.push(`  MCP:      ${s.mcpServers.join(", ")}`);
+  if (s.referencedScripts.length) {
+    L.push(`  scripts:  ${s.referencedScripts.join(", ")}  (runs bundled code — review it)`);
+  }
+
+  L.push("");
+  L.push("FOOTPRINT");
+  L.push(`  ~${tok(row.alwaysTokens)}t always     name + description, loaded every prompt`);
+  L.push(`  ~${tok(row.onDemandTokens)}t on demand  full body, loaded when the skill is invoked`);
+
+  L.push("");
+  if (row.findings.length === 0) {
+    L.push("FINDINGS (0)");
+    L.push("  ✓ nothing flagged — but a clean scan means nothing was found, not that");
+    L.push("    nothing is there; scope above is declared-only.");
+  } else {
+    L.push(`FINDINGS (${row.findings.length})`);
+    for (const f of row.findings) {
+      const mark = f.severity === "error" ? "✗" : f.severity === "warning" ? "⚠" : "ℹ";
+      L.push("");
+      L.push(`  ${mark} [${f.severity}] ${f.rule}${f.line ? `  (line ${f.line})` : ""}`);
+      L.push(`    ${f.message}`);
+      if (f.suggestion) L.push(`    → ${f.suggestion}`);
+    }
+  }
+  return L.join("\n");
+}
+
+/** Machine-readable single-skill check. */
+export function renderCheckJson(row: SkillRow): string {
+  return JSON.stringify(
+    {
+      path: row.path,
+      name: row.name,
+      scope: {
+        label: row.scopeLabel,
+        declaredTools: row.scope.declaredTools,
+        tools: row.scope.tools.map((t) => t.raw),
+        broad: row.scope.broad,
+        broadGrants: row.scope.broadGrants,
+        mcpServers: row.scope.mcpServers,
+        referencedScripts: row.scope.referencedScripts,
+      },
+      alwaysTokens: row.alwaysTokens,
+      onDemandTokens: row.onDemandTokens,
+      findings: row.findings,
+    },
+    null,
+    2
+  );
+}
+
 /** Machine-readable manifest. */
 export function renderJson(report: ManifestReport): string {
   return JSON.stringify(

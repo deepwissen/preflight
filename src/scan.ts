@@ -11,6 +11,7 @@ export interface Finding {
   rule: string;
   message: string;
   line?: number;
+  suggestion?: string;
 }
 
 function emptySnapshot(): ContextSnapshot {
@@ -58,7 +59,13 @@ export function scanSkill(path: string, content: string): Finding[] {
 
   const out: Finding[] = [];
   for (const f of scanSecrets(snap, {}).secretFindings ?? []) {
-    out.push({ severity: f.severity, rule: f.ruleId, message: f.description, line: f.lineNumber });
+    out.push({
+      severity: f.severity,
+      rule: f.ruleId,
+      message: f.description,
+      line: f.lineNumber,
+      suggestion: f.suggestion,
+    });
   }
   for (const i of scanInstructionIntegrity(snap, {}).instructionFileIssues ?? []) {
     out.push({
@@ -66,6 +73,7 @@ export function scanSkill(path: string, content: string): Finding[] {
       rule: i.issue,
       message: i.description,
       line: i.lineNumber,
+      suggestion: i.suggestion,
     });
   }
   for (const i of scanSkillScope(path, content)) {
@@ -74,6 +82,7 @@ export function scanSkill(path: string, content: string): Finding[] {
       rule: i.issue,
       message: i.description,
       line: i.lineNumber,
+      suggestion: i.suggestion,
     });
   }
   return out;
