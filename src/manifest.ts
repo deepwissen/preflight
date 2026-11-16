@@ -1,0 +1,89 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { extractSkillScope, type SkillScope } from "@deepwissen/preflight-core";
+import { findSkillFiles } from "./discover.js";
+import { scanSkill, type Finding } from "./scan.js";
+
+/** Static token footprint ~ chars/4. Honest approximation for a per-file number;
+ *  the real cost is conditional (descriptions load always, bodies on demand). */
+function estTokens(text: string): number {
+  return Math.round(text.length / 4);
+}
+
+const READ_ONLY_TOOLS = new Set([
+  "Read",
+  "Grep",
+  "Glob",
+  "WebFetch",
+  "WebSearch",
+  "NotebookRead",
+  "TodoWrite",
+]);
+
+/** A short, legible description of what a skill is cleared to do. */
+export function scopeLabel(scope: SkillScope): string {
+  if (!scope.declaredTools) return "unrestricted (no allowed-tools)";
+  if (scope.broad) return scope.broadGrants.join(", ");
+  const toolNames = scope.tools.map((t) => t.tool);
+  const parts: string[] = [];
+  if (toolNames.length > 0 && toolNames.every((t) => READ_ONLY_TOOLS.has(t) || t.startsWith("mcp__"))) {
+    parts.push(scope.mcpServers.length ? "read-only+MCP" : "read-only");
+  } else {
+    const shown = scope.tools
+      .filter((t) => !t.tool.startsWith("mcp__"))
+      .map((t) => t.raw)
+      .slice(0, 3);
+    parts.push(shown.join(", ") || "scoped");
+  }
+  if (scope.mcpServers.length && !parts[0].includes("MCP")) {
+    parts.push(`MCP:${scope.mcpServers.join("/")}`);
+  }
+  return parts.join(", ");
+}
+
+export interface SkillRow {
+  path: string;
+  name: string | null;
+  scope: SkillScope;
+  scopeLabel: string;
+  alwaysTokens: number;
+  onDemandTokens: number;
+  findings: Finding[];
+  errorCount: number;
+  warnCount: number;
+}
+
+export interface ManifestReport {
+  root: string;
+  rows: SkillRow[];
+  alwaysTotal: number;
+  onDemandTotal: number;
+}
+
+/** Build the agent-skill manifest for a project directory. */
+export function buildManifest(root: string): ManifestReport {
+  const rows: SkillRow[] = [];
+  for (const rel of findSkillFiles(root)) {
+    const content = readFileSync(join(root, rel), "utf8");
+    const scope = extractSkillScope(rel, content);
+    const findings = scanSkill(rel, content);
+    const always = estTokens(`${scope.name ?? ""} ${scope.description ?? ""}`.trim());
+    rows.push({
+      path: rel,
+      name: scope.name,
+      scope,
+      scopeLabel: scopeLabel(scope),
+      alwaysTokens: always,
+      onDemandTokens: estTokens(content),
+      findings,
+      errorCount: findings.filter((f) => f.severity === "error").length,
+      warnCount: findings.filter((f) => f.severity === "warning").length,
+    });
+  }
+  return {
+    root,
+    rows,
+    alwaysTotal: rows.reduce((n, r) => n + r.alwaysTokens, 0),
+    onDemandTotal: rows.reduce((n, r) => n + r.onDemandTokens, 0),
+  };
+}

@@ -1,0 +1,47 @@
+{
+  "name": "@deepwissen/preflight",
+  "version": "0.1.0",
+  "description": "Get your AI agent flight-ready — inventory, scope, and scan the skills it carries, before it flies.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "preflight": "./dist/bin.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/deepwissen/preflight.git"
+  },
+  "homepage": "https://github.com/deepwissen/preflight#readme",
+  "keywords": [
+    "ai",
+    "claude",
+    "skills",
+    "agent",
+    "security",
+    "preflight"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "check:floor": "node scripts/check-engine-floor.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@deepwissen/preflight-core": "^0.1.30"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
