@@ -58,6 +58,20 @@ preflight remove <name>        # preview what would be removed
 preflight remove <name> --yes  # move it to .preflight-trash/ (reversible)
 ```
 
+### Project vs personal skills
+
+Skills live at two levels, and both load into your agent. By default preflight acts
+on **project** skills (`./.claude/skills`); `--global` acts on **personal** skills
+(`~/.claude/skills`); `--all` lists both together with a WHERE column.
+
+```bash
+preflight list                 # project skills
+preflight list --global        # personal skills (~/.claude/skills)
+preflight list --all           # both, with a project/user column
+preflight add ./x --global     # install into personal skills
+preflight remove foo --global  # remove a personal skill
+```
+
 `add` is a **security gate, not a copy**: a skill from anywhere is untrusted
 instructions plus code, so it's staged and scanned first and installed only if it's
 clean (gate defaults to `--fail-on warning`). `remove` never hard-deletes — it moves
