@@ -2,7 +2,15 @@ import { readdirSync, statSync, existsSync, readFileSync } from "node:fs";
 import { join, relative, resolve, basename, dirname } from "node:path";
 import { isSkillScopeFile, extractSkillScope } from "@deepwissen/preflight-core";
 
-const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "coverage"]);
+const SKIP_DIRS = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  ".next",
+  "coverage",
+  ".preflight-trash",
+]);
 
 /**
  * Walk a project tree and return the skill/command/agent files the agent carries —

@@ -83,6 +83,24 @@ export function renderManifest(report: ManifestReport): string {
   return L.join("\n");
 }
 
+/** Compact one-line-per-skill listing of what's installed. */
+export function renderList(report: ManifestReport): string {
+  const { rows } = report;
+  if (rows.length === 0) return "No agent skills installed.";
+  const nameW = Math.max(4, ...rows.map((r) => (r.name ?? r.path).length));
+  const scopeW = Math.max(10, ...rows.map((r) => r.scopeLabel.length));
+  return rows
+    .map((r) => {
+      const check = r.errorCount
+        ? `✗ ${r.errorCount}`
+        : r.warnCount
+          ? `⚠ ${r.warnCount}`
+          : "✓";
+      return `  ${pad(r.name ?? r.path, nameW)}  ${pad(r.scopeLabel, scopeW)}  ${check}`;
+    })
+    .join("\n");
+}
+
 /** Render a single skill's detailed check view (the manifest drill-in). */
 export function renderCheck(row: SkillRow): string {
   const s = row.scope;
