@@ -31,6 +31,16 @@ preflight manifest --fail-on warning   # exit 1 on warning or worse
 Exit code is `0` clean, `1` if any finding meets the `--fail-on` threshold
 (`error` by default; `warning` or `any` to be stricter) — so it doubles as a CI gate.
 
+### Collisions & ambiguity
+
+`manifest` also reports **conflicts** between skills:
+
+- **Name collisions** — two skills with the same name. Personal (`~/.claude`) silently
+  shadows project (`./.claude`) with no warning from Claude Code, so `manifest --all`
+  spells out which one actually runs and which is dead.
+- **Ambiguous descriptions** — differently-named skills whose descriptions overlap, so
+  the agent's (model-driven) choice between them is unpredictable.
+
 ## Gate skills in CI
 
 Your CI already scans dependencies and secrets. Gate the agent skills your team
