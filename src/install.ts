@@ -77,6 +77,59 @@ export function planInstall(stagingDir: string, skillsDir: string): InstallItem[
   return items;
 }
 
+/**
+ * Parse an interactive/`--pick` selection string into 0-based item indices.
+ * Accepts numbers and ranges ("1,4,6", "1-3 5"), plus "all"/"*" and ""/"none".
+ */
+export function parseSelection(
+  input: string,
+  count: number
+): { indices: number[] } | { error: string } {
+  const s = input.trim().toLowerCase();
+  if (s === "" || s === "none") return { indices: [] };
+  if (s === "all" || s === "*") return { indices: Array.from({ length: count }, (_, i) => i) };
+
+  const picked = new Set<number>();
+  for (const part of s.split(/[,\s]+/).filter(Boolean)) {
+    const range = /^(\d+)-(\d+)$/.exec(part);
+    if (range) {
+      let [a, b] = [Number(range[1]), Number(range[2])];
+      if (a > b) [a, b] = [b, a];
+      for (let n = a; n <= b; n++) {
+        if (n < 1 || n > count) return { error: `selection out of range: ${n} (have 1-${count})` };
+        picked.add(n - 1);
+      }
+    } else if (/^\d+$/.test(part)) {
+      const n = Number(part);
+      if (n < 1 || n > count) return { error: `selection out of range: ${n} (have 1-${count})` };
+      picked.add(n - 1);
+    } else {
+      return { error: `not a number or range: "${part}"` };
+    }
+  }
+  return { indices: [...picked].sort((a, b) => a - b) };
+}
+
+/** Select planned items by skill name (--only), matching dir name or declared name. */
+export function selectByNames(
+  items: InstallItem[],
+  names: string[]
+): { selected: InstallItem[]; notFound: string[] } {
+  const byName = new Map<string, InstallItem>();
+  for (const it of items) {
+    byName.set(it.name.toLowerCase(), it);
+    if (it.row.name) byName.set(it.row.name.toLowerCase(), it);
+  }
+  const selected: InstallItem[] = [];
+  const notFound: string[] = [];
+  for (const raw of names) {
+    const it = byName.get(raw.trim().toLowerCase());
+    if (it && !selected.includes(it)) selected.push(it);
+    else if (!it) notFound.push(raw.trim());
+  }
+  return { selected, notFound };
+}
+
 /** Copy one planned skill into .claude/skills (overwriting only when asked). */
 export function installItem(item: InstallItem, opts: { overwrite?: boolean }): void {
   if (item.exists && !opts.overwrite) {

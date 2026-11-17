@@ -1,5 +1,22 @@
 import { flatFindings, type ManifestReport, type SkillRow } from "./manifest.js";
 import { detectCollisions, detectAmbiguities, analyzeConflicts } from "./collisions.js";
+import type { InstallItem } from "./install.js";
+
+/** A numbered, choose-by-number list of skills found in a source — each with its
+ *  risk and per-prompt cost, so the user picks informed (e.g. "1,4,6"). */
+export function renderPickList(items: InstallItem[], label: string): string {
+  const nameW = Math.max(4, ...items.map((i) => i.name.length));
+  const scopeW = Math.max(10, ...items.map((i) => i.row.scopeLabel.length));
+  const L = [`Skills in ${label} (${items.length} found):`, ""];
+  items.forEach((it, i) => {
+    const r = it.row;
+    const check = r.errorCount ? `✗ ${r.errorCount}` : r.warnCount ? `⚠ ${r.warnCount}` : "✓";
+    L.push(
+      `  ${String(i + 1).padStart(3)}  ${pad(it.name, nameW)}  ${pad(r.scopeLabel, scopeW)}  ${pad(check, 5)} ${tok(r.alwaysTokens)}t/prompt`
+    );
+  });
+  return L.join("\n");
+}
 
 function tok(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;

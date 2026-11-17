@@ -2,6 +2,7 @@ import { parseArgs } from "node:util";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync, existsSync } from "node:fs";
+import { createInterface } from "node:readline";
 import {
   buildScopes,
   buildRow,
@@ -17,9 +18,18 @@ import {
   renderCheck,
   renderCheckJson,
   renderList,
+  renderPickList,
 } from "./render.js";
 import { renderManifestSarif } from "./sarif.js";
-import { stageSource, planInstall, installItem, removeSkill } from "./install.js";
+import {
+  stageSource,
+  planInstall,
+  installItem,
+  removeSkill,
+  parseSelection,
+  selectByNames,
+  type InstallItem,
+} from "./install.js";
 
 const FAIL_ON: readonly string[] = ["error", "warning", "any"];
 
@@ -33,7 +43,18 @@ function scopesFromFlags(
   return [projectScope(projectRoot)];
 }
 
-const VERSION = "0.1.0"; // keep in sync with package.json
+const VERSION = "0.2.0"; // keep in sync with package.json
+
+/** Read one line from stdin (interactive skill selection). */
+function promptLine(question: string): Promise<string> {
+  return new Promise((res) => {
+    const rl = createInterface({ input: process.stdin, output: process.stderr });
+    rl.question(question, (answer) => {
+      rl.close();
+      res(answer);
+    });
+  });
+}
 
 /** Resolve the @deepwissen/preflight-core version actually in use, for --version. */
 function engineVersion(): string | null {
@@ -62,8 +83,9 @@ Usage:
   preflight manifest [path]   Full inventory — scope, token footprint, scan of each.
   preflight check <skill>     Drill into one skill (by name or path): full scope,
                               footprint, and every finding with its fix.
-  preflight add <source>      Stage a skill (local path or owner/repo), scan it,
-                              and install it only if it's clean (or you --force).
+  preflight add <source>      Stage skills (local path or owner/repo), scan them,
+                              and choose which to install (not the whole repo).
+                              Picks interactively, or: --only <names> / --pick <nums>.
   preflight remove <name>     Move an installed skill to .preflight-trash/ (needs --yes).
 
 Scope (list/manifest/check/add/remove):
@@ -75,6 +97,8 @@ Options:
   --json                      Machine-readable output
   --sarif                     SARIF 2.1.0 → GitHub code scanning annotations
   --fail-on <level>           Exit non-zero on: error (default) | warning | any
+  --only <names>              (add) install only these skills (comma-separated)
+  --pick <nums>               (add) install these by number: 1,4,6 / 1-3 / all
   --force                     (add) install despite findings
   --overwrite                 (add) replace a skill that's already installed
   --dry-run                   (add) scan and report, install nothing
@@ -221,7 +245,11 @@ function runList(argv: string[], out: (s: string) => void, err: (s: string) => v
   return 0;
 }
 
-function runAdd(argv: string[], out: (s: string) => void, err: (s: string) => void): number {
+async function runAdd(
+  argv: string[],
+  out: (s: string) => void,
+  err: (s: string) => void
+): Promise<number> {
   let values: Record<string, unknown>;
   let positionals: string[];
   try {
@@ -233,6 +261,8 @@ function runAdd(argv: string[], out: (s: string) => void, err: (s: string) => vo
         overwrite: { type: "boolean" },
         "dry-run": { type: "boolean" },
         global: { type: "boolean" },
+        only: { type: "string" },
+        pick: { type: "string" },
         "fail-on": { type: "string", default: "warning" },
       },
     });
@@ -246,6 +276,10 @@ function runAdd(argv: string[], out: (s: string) => void, err: (s: string) => vo
   const failOn = String(values["fail-on"]);
   if (!FAIL_ON.includes(failOn)) {
     err(`preflight: --fail-on must be one of ${FAIL_ON.join(", ")}\n`);
+    return 2;
+  }
+  if (values.only !== undefined && values.pick !== undefined) {
+    err("preflight add: use --only or --pick, not both\n");
     return 2;
   }
   const src = positionals[0];
@@ -264,40 +298,81 @@ function runAdd(argv: string[], out: (s: string) => void, err: (s: string) => vo
 
   const target = values.global ? userScope() : projectScope();
   try {
-    const plan = planInstall(staging.dir, target.skillsDir);
-    if (plan.length === 0) {
+    const items = planInstall(staging.dir, target.skillsDir);
+    if (items.length === 0) {
       err(`preflight: no skills (SKILL.md) found in "${src}"\n`);
       return 2;
     }
 
+    // --- choose which skills to install (not the whole repo) ---
+    let selected: InstallItem[];
+    if (values.only !== undefined) {
+      const names = String(values.only).split(",").map((s) => s.trim()).filter(Boolean);
+      const r = selectByNames(items, names);
+      if (r.notFound.length) {
+        err(`preflight: not found in "${src}": ${r.notFound.join(", ")}\n`);
+        out(renderPickList(items, src) + "\n");
+        return 2;
+      }
+      selected = r.selected;
+    } else if (values.pick !== undefined) {
+      const r = parseSelection(String(values.pick), items.length);
+      if ("error" in r) {
+        err(`preflight: ${r.error}\n`);
+        return 2;
+      }
+      selected = r.indices.map((i) => items[i]);
+    } else if (items.length === 1) {
+      selected = items;
+    } else {
+      out(renderPickList(items, src) + "\n");
+      if (process.stdin.isTTY) {
+        const answer = await promptLine("\nInstall which? (e.g. 1,4,6 or 1-3 · all · none): ");
+        const r = parseSelection(answer, items.length);
+        if ("error" in r) {
+          err(`preflight: ${r.error}\n`);
+          return 2;
+        }
+        selected = r.indices.map((i) => items[i]);
+      } else {
+        out("\nChoose skills to install:  --pick 1,4,6  (or --pick all)  ·  --only <names>\n");
+        return 0;
+      }
+    }
+
+    if (selected.length === 0) {
+      out("nothing selected — nothing installed.\n");
+      return 0;
+    }
+
+    // --- gate the chosen skills, then install ---
     const report: ManifestReport = {
       root: src,
-      rows: plan.map((p) => p.row),
-      alwaysTotal: plan.reduce((n, p) => n + p.row.alwaysTokens, 0),
-      onDemandTotal: plan.reduce((n, p) => n + p.row.onDemandTokens, 0),
+      rows: selected.map((s) => s.row),
+      alwaysTotal: selected.reduce((n, s) => n + s.row.alwaysTokens, 0),
+      onDemandTotal: selected.reduce((n, s) => n + s.row.onDemandTokens, 0),
     };
-    out(renderManifest(report) + "\n");
-
     if (exitForReport(report, failOn as FailOn) === 1 && !values.force) {
+      const bad = selected.filter((s) => s.row.errorCount || s.row.warnCount).map((s) => s.name);
       err(
-        `\npreflight: blocked — findings at/above "${failOn}". Review above; re-run with --force to install anyway.\n`
+        `\npreflight: blocked — ${bad.join(", ")} ha${bad.length > 1 ? "ve" : "s"} findings at/above "${failOn}". Re-run with --force to install anyway.\n`
       );
       return 1;
     }
     if (values["dry-run"]) {
-      out("\ndry run — nothing installed.\n");
+      out(`\ndry run — would install ${selected.length}: ${selected.map((s) => s.name).join(", ")}\n`);
       return 0;
     }
 
-    const clash = plan.filter((p) => p.exists);
+    const clash = selected.filter((s) => s.exists);
     if (clash.length && !values.overwrite) {
-      err(`preflight: already installed: ${clash.map((p) => p.name).join(", ")} (use --overwrite)\n`);
+      err(`preflight: already installed: ${clash.map((s) => s.name).join(", ")} (use --overwrite)\n`);
       return 1;
     }
-    for (const item of plan) installItem(item, { overwrite: Boolean(values.overwrite) });
+    for (const item of selected) installItem(item, { overwrite: Boolean(values.overwrite) });
     out(
-      `\ninstalled ${plan.length} skill(s) into ${target.name} scope (${target.skillsDir}): ${plan
-        .map((p) => p.name)
+      `\ninstalled ${selected.length} skill(s) into ${target.name} scope (${target.skillsDir}): ${selected
+        .map((s) => s.name)
         .join(", ")}\n`
     );
     return 0;
@@ -342,11 +417,11 @@ function runRemove(argv: string[], out: (s: string) => void, err: (s: string) =>
   return 0;
 }
 
-export function run(
+export async function run(
   argv: string[],
   out: (s: string) => void = (s) => void process.stdout.write(s),
   err: (s: string) => void = (s) => void process.stderr.write(s)
-): number {
+): Promise<number> {
   const sub = argv[0];
   if (!sub || sub === "-h" || sub === "--help") {
     out(HELP + "\n");

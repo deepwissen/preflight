@@ -60,10 +60,12 @@ or ships a secret in a bundled script:
 
 ```bash
 preflight list                 # compact list of installed skills
-preflight add ./some-skill     # stage → scan → install (only if clean)
-preflight add owner/repo       # same, from a GitHub repo (shallow clone)
-preflight add ./x --dry-run    # scan and report, install nothing
-preflight add ./x --force      # install despite findings
+preflight add owner/repo            # clone + scan, then CHOOSE which to install
+preflight add owner/repo --pick 1,4,6   # install those by number (1-3 / all also work)
+preflight add owner/repo --only tdd,pr  # install these by name
+preflight add ./some-skill         # a single local skill
+preflight add ./x --dry-run        # scan and report, install nothing
+preflight add ./x --force          # install despite findings
 preflight remove <name>        # preview what would be removed
 preflight remove <name> --yes  # move it to .preflight-trash/ (reversible)
 ```
@@ -82,9 +84,11 @@ preflight add ./x --global     # install into personal skills
 preflight remove foo --global  # remove a personal skill
 ```
 
-`add` is a **security gate, not a copy**: a skill from anywhere is untrusted
-instructions plus code, so it's staged and scanned first and installed only if it's
-clean (gate defaults to `--fail-on warning`). `remove` never hard-deletes — it moves
+`add` is a **security gate and a chooser, not a bulk copy**: a repo of skills is
+staged and scanned, then shown as a numbered list (with each skill's risk and
+per-prompt token cost) so you install only the few you want — not all 39. It prompts
+interactively in a terminal, or takes `--pick <numbers>` / `--only <names>`. Chosen
+skills are installed only if clean (gate defaults to `--fail-on warning`). `remove` never hard-deletes — it moves
 the skill to `.preflight-trash/`, which discovery ignores.
 
 ## Honest limits
