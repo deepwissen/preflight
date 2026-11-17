@@ -1,4 +1,5 @@
 import { flatFindings, type ManifestReport, type SkillRow } from "./manifest.js";
+import { detectCollisions, detectAmbiguities, analyzeConflicts } from "./collisions.js";
 
 function tok(n: number): string {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
@@ -78,6 +79,33 @@ export function renderManifest(report: ManifestReport): string {
     L.push(`CLEAN  (${clean.length})  ${clean.join(" · ")}`);
   }
 
+  const collisions = detectCollisions(rows);
+  const ambiguities = detectAmbiguities(rows);
+  if (collisions.length || ambiguities.length) {
+    L.push("");
+    L.push(`CONFLICTS  (${collisions.length + ambiguities.length})`);
+    for (const c of collisions) {
+      L.push("");
+      if (c.sameScope) {
+        L.push(`  ⚠ ${c.shadowed.length} skills named "${c.name}" in the same scope — resolution is unspecified`);
+        for (const s of c.shadowed) L.push(`       ${s.path}`);
+      } else {
+        const losers = c.shadowed.map((s) => s.origin).join("/");
+        L.push(`  ⚠ name "${c.name}" — ${c.winner!.origin} shadows ${losers} (only the ${c.winner!.origin} one runs)`);
+        L.push(`       wins:     ${c.winner!.path}  (${c.winner!.origin})`);
+        for (const s of c.shadowed) L.push(`       shadowed: ${s.path}  (${s.origin})`);
+      }
+    }
+    for (const a of ambiguities) {
+      L.push("");
+      L.push(
+        `  ⚠ "${a.a.name}" ↔ "${a.b.name}" — overlapping descriptions (${Math.round(
+          a.similarity * 100
+        )}%); the agent may pick either`
+      );
+    }
+  }
+
   L.push("");
   L.push("─".repeat(78));
   L.push("Footprint is static (descriptions load always, bodies on demand — not every");
@@ -93,17 +121,16 @@ export function renderList(report: ManifestReport): string {
   const nameW = Math.max(4, ...rows.map((r) => (r.name ?? r.path).length));
   const scopeW = Math.max(10, ...rows.map((r) => r.scopeLabel.length));
   const showWhere = rows.some((r) => r.origin);
-  return rows
-    .map((r) => {
-      const check = r.errorCount
-        ? `✗ ${r.errorCount}`
-        : r.warnCount
-          ? `⚠ ${r.warnCount}`
-          : "✓";
-      const where = showWhere ? `${pad(r.origin ?? "", 8)}  ` : "";
-      return `  ${pad(r.name ?? r.path, nameW)}  ${pad(r.scopeLabel, scopeW)}  ${where}${check}`;
-    })
-    .join("\n");
+  const lines = rows.map((r) => {
+    const check = r.errorCount ? `✗ ${r.errorCount}` : r.warnCount ? `⚠ ${r.warnCount}` : "✓";
+    const where = showWhere ? `${pad(r.origin ?? "", 8)}  ` : "";
+    return `  ${pad(r.name ?? r.path, nameW)}  ${pad(r.scopeLabel, scopeW)}  ${where}${check}`;
+  });
+  const nConflict = detectCollisions(rows).length + detectAmbiguities(rows).length;
+  if (nConflict) {
+    lines.push(`  ⚠ ${nConflict} conflict(s) — run: preflight manifest${showWhere ? " --all" : ""}`);
+  }
+  return lines.join("\n");
 }
 
 /** Render a single skill's detailed check view (the manifest drill-in). */
@@ -203,6 +230,7 @@ export function renderJson(report: ManifestReport): string {
       root: report.root,
       alwaysTotal: report.alwaysTotal,
       onDemandTotal: report.onDemandTotal,
+      conflicts: analyzeConflicts(report.rows),
       skills: report.rows.map((r) => ({
         path: r.path,
         name: r.name,
