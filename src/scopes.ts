@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, dirname, basename } from "node:path";
+import { findSkillFiles } from "./discover.js";
 
 export type ScopeName = "project" | "user";
 
@@ -41,4 +43,56 @@ export function scopesFor(flags: { global?: boolean; all?: boolean }): Scope[] {
   if (flags.all) return [projectScope(), userScope()];
   if (flags.global) return [userScope()];
   return [projectScope()];
+}
+
+/** Lightweight list of a scope's skill names (lowercased) — reads only each
+ *  file's frontmatter `name` (falling back to the directory/filename), no scan. */
+export function scopeSkillNames(scope: Scope): string[] {
+  const names: string[] = [];
+  for (const rel of findSkillFiles(scope.scanRoot, scope.skip)) {
+    let name = "";
+    try {
+      const head = readFileSync(join(scope.scanRoot, rel), "utf8").slice(0, 2000);
+      const m = /^[ \t]*name[ \t]*:[ \t]*(.+?)[ \t]*$/m.exec(head);
+      if (m) name = m[1].replace(/^["']|["']$/g, "");
+    } catch {
+      /* unreadable — fall through to path derivation */
+    }
+    if (!name) {
+      const file = basename(rel);
+      name = /^skill\.md$/i.test(file) ? basename(dirname(rel)) : file.replace(/\.md$/i, "");
+    }
+    if (name) names.push(name.toLowerCase());
+  }
+  return names;
+}
+
+/**
+ * Cross-scope hints for a single-scope view: warn when a shown skill is shadowed
+ * by (or shadows) a same-named skill in the other scope, and nudge that the other
+ * scope's skills aren't shown. Personal (user) always wins over project. Pure.
+ */
+export function shadowNotices(opts: {
+  shown: string[]; // names in the shown scope (lowercased)
+  other: string[]; // names in the other scope (lowercased)
+  global: boolean; // true when the shown scope is the user (personal) scope
+  command: string; // "manifest" | "list"
+}): string[] {
+  const otherSet = new Set(opts.other);
+  const collisions = [...new Set(opts.shown)].filter((n) => otherSet.has(n)).sort();
+  const notices: string[] = [];
+  for (const name of collisions) {
+    notices.push(
+      opts.global
+        ? `  ⚠ "${name}" also exists as a project skill — this personal one runs; the project one is shadowed.`
+        : `  ⚠ "${name}" is also a personal skill (~/.claude) — the personal one runs; this project one is shadowed.`
+    );
+  }
+  if (opts.other.length > 0) {
+    const label = opts.global ? "project" : "personal";
+    notices.push(
+      `  ℹ ${opts.other.length} ${label} skill(s) not shown — run \`preflight ${opts.command} --all\` to include them.`
+    );
+  }
+  return notices;
 }

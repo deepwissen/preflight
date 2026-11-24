@@ -10,7 +10,14 @@ import {
   type FailOn,
   type ManifestReport,
 } from "./manifest.js";
-import { projectScope, userScope, type Scope } from "./scopes.js";
+import {
+  projectScope,
+  userScope,
+  scopeSkillNames,
+  shadowNotices,
+  type Scope,
+} from "./scopes.js";
+import { skillName } from "./collisions.js";
 import { resolveSkill, type Resolved } from "./discover.js";
 import {
   renderManifest,
@@ -33,6 +40,19 @@ import {
 
 const FAIL_ON: readonly string[] = ["error", "warning", "any"];
 
+/** Shadowing + hidden-scope hints for a single-scope view (not --all). */
+function crossScopeNotices(
+  flags: { global?: unknown; all?: unknown },
+  projectRoot: string,
+  report: ManifestReport,
+  command: string
+): string[] {
+  if (flags.all) return [];
+  const shown = report.rows.map((r) => skillName(r).toLowerCase());
+  const other = scopeSkillNames(flags.global ? projectScope(projectRoot) : userScope());
+  return shadowNotices({ shown, other, global: Boolean(flags.global), command });
+}
+
 /** Scopes to act on, honoring --global / --all and an optional explicit project path. */
 function scopesFromFlags(
   flags: { global?: unknown; all?: unknown },
@@ -43,7 +63,7 @@ function scopesFromFlags(
   return [projectScope(projectRoot)];
 }
 
-const VERSION = "0.2.0"; // keep in sync with package.json
+const VERSION = "0.2.1"; // keep in sync with package.json
 
 /** Read one line from stdin (interactive skill selection). */
 function promptLine(question: string): Promise<string> {
@@ -144,13 +164,15 @@ function runManifest(argv: string[], out: (s: string) => void, err: (s: string) 
   }
 
   const report = buildScopes(scopesFromFlags(values, projectRoot));
-  out(
-    (values.sarif
-      ? renderManifestSarif(report)
-      : values.json
-        ? renderJson(report)
-        : renderManifest(report)) + "\n"
-  );
+  if (values.sarif) {
+    out(renderManifestSarif(report) + "\n");
+  } else if (values.json) {
+    out(renderJson(report) + "\n");
+  } else {
+    out(renderManifest(report) + "\n");
+    const notices = crossScopeNotices(values, projectRoot, report, "manifest");
+    if (notices.length) out(notices.join("\n") + "\n");
+  }
   return exitForReport(report, failOn as FailOn);
 }
 
@@ -241,7 +263,10 @@ function runList(argv: string[], out: (s: string) => void, err: (s: string) => v
     err(`preflight: no such path: ${projectRoot}\n`);
     return 2;
   }
-  out(renderList(buildScopes(scopesFromFlags(values, projectRoot))) + "\n");
+  const report = buildScopes(scopesFromFlags(values, projectRoot));
+  out(renderList(report) + "\n");
+  const notices = crossScopeNotices(values, projectRoot, report, "list");
+  if (notices.length) out(notices.join("\n") + "\n");
   return 0;
 }
 

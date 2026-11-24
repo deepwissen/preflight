@@ -1,6 +1,6 @@
 {
   "name": "@deepwissen/preflight",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Get your AI agent flight-ready — inventory, scope, and scan the skills it carries, before it flies.",
   "license": "MIT",
   "type": "module",
