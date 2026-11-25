@@ -2,6 +2,7 @@ import {
   scanSecrets,
   scanInstructionIntegrity,
   scanSkillScope,
+  scanMcpConfigs,
   detectTraps,
   type ContextSnapshot,
   type FileInfo,
@@ -121,6 +122,37 @@ export function scanCode(path: string, content: string, languageId: string): Fin
       line: lineFrom(w.description),
       suggestion: w.suggestion,
     });
+  }
+  return out;
+}
+
+/** A bundled MCP config file (by name, or any JSON declaring servers). */
+export function looksMcpConfig(path: string, content: string): boolean {
+  const base = (path.split("/").pop() ?? path).toLowerCase();
+  if (/^(\.mcp\.json|mcp\.json|claude_desktop_config\.json)$/.test(base)) return true;
+  return base.endsWith(".json") && (content.includes('"mcpServers"') || content.includes('"servers"'));
+}
+
+/**
+ * Scan a bundled MCP config for MCP-specific risk (embedded secrets, unpinned
+ * servers, injected tool descriptions) plus hardcoded secrets and hidden-unicode
+ * payloads in tool descriptions. A skill can ship one of these to wire the agent
+ * up to a server — a supply-chain surface the SKILL.md prose hides.
+ */
+export function scanMcpConfig(path: string, content: string): Finding[] {
+  const snap = emptySnapshot();
+  snap.activeFile = fileInfo(path, content, "json");
+  snap.mcpConfigFiles = [{ path, content }];
+
+  const out: Finding[] = [];
+  for (const f of scanSecrets(snap, {}).secretFindings ?? []) {
+    out.push({ severity: f.severity, rule: f.ruleId, message: f.description, line: f.lineNumber, suggestion: f.suggestion });
+  }
+  for (const i of scanMcpConfigs(snap, {}).instructionFileIssues ?? []) {
+    out.push({ severity: i.severity ?? "warning", rule: i.issue, message: i.description, line: i.lineNumber, suggestion: i.suggestion });
+  }
+  for (const i of scanInstructionIntegrity(snap, {}).instructionFileIssues ?? []) {
+    out.push({ severity: i.severity ?? "warning", rule: i.issue, message: i.description, line: i.lineNumber, suggestion: i.suggestion });
   }
   return out;
 }

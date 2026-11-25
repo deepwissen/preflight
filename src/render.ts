@@ -212,7 +212,7 @@ export function renderCheck(row: SkillRow): string {
   if (b.scripts.length || b.otherFiles) {
     L.push("");
     const other = b.otherFiles ? `, ${b.otherFiles} other file${b.otherFiles > 1 ? "s" : ""}` : "";
-    L.push(`BUNDLED FILES (${b.scripts.length} script${b.scripts.length === 1 ? "" : "s"}${other})`);
+    L.push(`BUNDLED FILES (${b.scripts.length} scanned${other})`);
     for (const sc of b.scripts) {
       const errs = sc.findings.filter((f) => f.severity === "error").length;
       const st = errs

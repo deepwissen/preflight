@@ -1,6 +1,6 @@
 import { readdirSync, statSync, readFileSync } from "node:fs";
 import { join, dirname, relative, extname } from "node:path";
-import { scanCode, type Finding } from "./scan.js";
+import { scanCode, scanMcpConfig, looksMcpConfig, type Finding } from "./scan.js";
 
 // Executable/script file types a skill may ship alongside its SKILL.md. The agent
 // can be told to run these, so they're code the skill carries — worth scanning.
@@ -70,22 +70,38 @@ export function enumerateBundle(skillAbsPath: string): Bundle {
       }
       if (abs === skillAbsPath) continue; // the SKILL.md prose is scanned elsewhere
       count++;
-      const lang = SCRIPT_LANG[extname(name).toLowerCase()];
-      if (!lang) {
-        otherFiles++;
-        continue;
-      }
+      const ext = extname(name).toLowerCase();
+      const lang = SCRIPT_LANG[ext];
       const rel = relative(root, abs);
-      if (s.size > MAX_BYTES) {
-        scripts.push({ path: rel, language: lang, bytes: s.size, findings: [] });
+
+      // 1. A bundled script — scan as code (secrets + traps).
+      if (lang) {
+        scripts.push({
+          path: rel,
+          language: lang,
+          bytes: s.size,
+          findings: s.size > MAX_BYTES ? [] : scanCode(rel, readFileSync(abs, "utf8"), lang),
+        });
         continue;
       }
-      scripts.push({
-        path: rel,
-        language: lang,
-        bytes: s.size,
-        findings: scanCode(rel, readFileSync(abs, "utf8"), lang),
-      });
+
+      // 2. A bundled MCP config (.json wiring the agent to a server) — scan for
+      //    MCP risk: unpinned servers, embedded secrets, injected tool descriptions.
+      if (ext === ".json" && s.size <= MAX_BYTES) {
+        const content = readFileSync(abs, "utf8");
+        if (looksMcpConfig(rel, content)) {
+          scripts.push({
+            path: rel,
+            language: "mcp-config",
+            bytes: s.size,
+            findings: scanMcpConfig(rel, content),
+          });
+          continue;
+        }
+      }
+
+      // 3. Everything else — ships with the skill but isn't code we scan.
+      otherFiles++;
     }
   };
 
