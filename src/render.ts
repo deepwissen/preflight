@@ -1,6 +1,11 @@
 import { flatFindings, type ManifestReport, type SkillRow } from "./manifest.js";
 import { detectCollisions, detectAmbiguities, analyzeConflicts } from "./collisions.js";
+import { skillHealth, type HealthStatus } from "./health.js";
 import type { InstallItem } from "./install.js";
+
+function hmark(s: HealthStatus): string {
+  return s === "ok" ? "✓" : s === "warn" ? "⚠" : "✗";
+}
 
 /** A numbered, choose-by-number list of skills found in a source — each with its
  *  risk and per-prompt cost, so the user picks informed (e.g. "1,4,6"). */
@@ -159,6 +164,14 @@ export function renderCheck(row: SkillRow): string {
   L.push("");
   L.push(`  ${row.name ?? row.path}${s.description ? ` — ${s.description}` : ""}`);
 
+  const health = skillHealth(row);
+  const vmark = health.verdict === "healthy" ? "✓" : health.verdict === "needs attention" ? "⚠" : "✗";
+  L.push("");
+  L.push(`HEALTH: ${vmark} ${health.verdict}`);
+  for (const d of health.dims) {
+    L.push(`  ${hmark(d.status)} ${pad(d.key, 9)} ${d.note}`);
+  }
+
   L.push("");
   L.push("SCOPE (declared)");
   if (!s.declaredTools) {
@@ -221,6 +234,7 @@ export function renderCheckJson(row: SkillRow): string {
     {
       path: row.path,
       name: row.name,
+      health: skillHealth(row),
       scope: {
         label: row.scopeLabel,
         declaredTools: row.scope.declaredTools,

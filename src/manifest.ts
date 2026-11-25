@@ -50,6 +50,7 @@ export interface SkillRow {
   scopeLabel: string;
   alwaysTokens: number;
   onDemandTokens: number;
+  lines: number; // body line count (for the size health check)
   findings: Finding[]; // the SKILL.md's own findings
   bundle: Bundle; // scripts the skill ships, each scanned
   errorCount: number; // across the skill AND its bundle
@@ -90,6 +91,7 @@ export function buildRow(absPath: string, displayPath: string): SkillRow {
     scopeLabel: scopeLabel(scope),
     alwaysTokens: estTokens(`${scope.name ?? ""} ${scope.description ?? ""}`.trim()),
     onDemandTokens: estTokens(content),
+    lines: content.split("\n").length,
     findings,
     bundle,
     errorCount: all.filter((f) => f.severity === "error").length,
