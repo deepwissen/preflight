@@ -65,7 +65,7 @@ function scopesFromFlags(
   return [projectScope(projectRoot)];
 }
 
-const VERSION = "0.3.0"; // keep in sync with package.json
+const VERSION = "0.3.1"; // keep in sync with package.json
 
 /** Read one line from stdin (interactive skill selection). */
 function promptLine(question: string): Promise<string> {

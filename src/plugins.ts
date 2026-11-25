@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { findSkillFiles } from "./discover.js";
 import { buildRow, flatFindings } from "./manifest.js";
 import { scanMcpConfig, type Finding } from "./scan.js";
+import { scanHooks } from "./hooks.js";
 
 /**
  * Audit installed Claude Code plugins (~/.claude/plugins). A plugin is a bigger
@@ -90,6 +91,10 @@ function scanPlugin(dir: string, name: string, marketplace: string, source: stri
     }
   }
 
+  // Hooks — the highest-privilege component (run commands on events).
+  const hasHooks = existsSync(join(dir, "hooks", "hooks.json"));
+  for (const f of scanHooks(dir)) findings.push({ file: `${name}/hooks.json`, finding: f });
+
   return {
     name,
     marketplace,
@@ -97,7 +102,7 @@ function scanPlugin(dir: string, name: string, marketplace: string, source: stri
     skills: skillFiles.length,
     commands: countMd(join(dir, "commands")),
     hasMcp,
-    hasHooks: existsSync(join(dir, "hooks", "hooks.json")),
+    hasHooks,
     findings,
     errorCount: findings.filter((f) => f.finding.severity === "error").length,
     warnCount: findings.filter((f) => f.finding.severity === "warning").length,

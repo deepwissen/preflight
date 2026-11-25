@@ -186,14 +186,15 @@ export function renderPlugins(plugins: import("./plugins.js").PluginInfo[]): str
     L.push(`  ${pad(p.name, nameW)}  ${pad(p.source, srcW)}  ${pad(bundles, 22)}  ${check}`);
   }
 
-  const flagged = plugins.filter((p) => p.findings.length);
+  const flagged = plugins.filter((p) => p.errorCount || p.warnCount);
   if (flagged.length) {
     L.push("");
     L.push(`NEEDS ATTENTION  (${flagged.length})`);
     for (const p of flagged) {
       L.push("");
       L.push(`  ${p.errorCount ? "✗" : "⚠"} ${p.name}   (${p.source})`);
-      for (const { file, finding: f } of p.findings) {
+      // show the real findings, not the info-level "runs hooks on …" transparency line
+      for (const { file, finding: f } of p.findings.filter((x) => x.finding.severity !== "info")) {
         L.push(`     • [${f.severity}] ${file}: ${f.message}${f.line ? ` (line ${f.line})` : ""}`);
       }
     }
@@ -201,8 +202,9 @@ export function renderPlugins(plugins: import("./plugins.js").PluginInfo[]): str
 
   L.push("");
   L.push("─".repeat(78));
-  L.push("Audits bundled skills + MCP configs. Hooks and loose scripts are NOT yet scanned,");
-  L.push("so a clean plugin means its skills/MCP are clean — not that the plugin is safe.");
+  L.push("Audits bundled skills, MCP configs, and hooks (incl. the scripts hooks invoke).");
+  L.push("Loose scripts not reached by a skill or hook may be unscanned; a clean scan means");
+  L.push("no known-bad patterns were found — not a guarantee the plugin is safe.");
   return L.join("\n");
 }
 

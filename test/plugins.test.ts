@@ -68,6 +68,7 @@ describe("discoverPlugins", () => {
     expect(view).toContain("mcp-connector");
     expect(view).toContain("github:acme/plugins");
     expect(view).toContain("NEEDS ATTENTION");
-    expect(view).toContain("Hooks and loose scripts are NOT yet scanned");
+    expect(view).toContain("MCP configs, and hooks");
+    expect(view).toContain("not a guarantee the plugin is safe");
   });
 });
