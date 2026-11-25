@@ -222,7 +222,10 @@ export function renderList(report: ManifestReport): string {
   }
   const nConflict = detectCollisions(rows).length + detectAmbiguities(rows).length;
   if (nConflict) {
-    lines.push("", `  ⚠ ${nConflict} conflict(s) — run: preflight manifest${showWhere ? " --all" : ""}`);
+    lines.push(
+      "",
+      `  ⚠ ${nConflict} conflict(s) — run \`preflight manifest${showWhere ? " --all" : ""}\` for details`
+    );
   }
   return lines.join("\n");
 }
