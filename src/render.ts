@@ -152,6 +152,60 @@ export function renderManifest(report: ManifestReport): string {
   return L.join("\n");
 }
 
+/** Render the installed-plugin audit. */
+export function renderPlugins(plugins: import("./plugins.js").PluginInfo[]): string {
+  if (plugins.length === 0) return "No installed plugins found (~/.claude/plugins).";
+
+  const need = plugins.filter((p) => p.errorCount || p.warnCount).length;
+  const mark = plugins.some((p) => p.errorCount) ? "✗" : need ? "⚠" : "✓";
+  const markets = [...new Set(plugins.map((p) => p.marketplace))];
+  const L: string[] = [
+    `preflight · ${mark} ${plugins.length} plugin${plugins.length === 1 ? "" : "s"} · ${
+      need ? `${need} need${need === 1 ? "s" : ""} attention` : "all clean"
+    } · ${markets.length} marketplace${markets.length === 1 ? "" : "s"}`,
+    "",
+  ];
+
+  const nameW = Math.max(6, ...plugins.map((p) => p.name.length));
+  const srcW = Math.max(8, ...plugins.map((p) => p.source.length));
+  L.push("INSTALLED PLUGINS");
+  for (const p of plugins) {
+    const bundles = [
+      p.skills ? `${p.skills} skill${p.skills === 1 ? "" : "s"}` : "",
+      p.commands ? `${p.commands} cmd` : "",
+      p.hasMcp ? "MCP" : "",
+      p.hasHooks ? "hooks" : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    const check = p.errorCount
+      ? `✗ ${p.errorCount + p.warnCount}`
+      : p.warnCount
+        ? `⚠ ${p.warnCount}`
+        : "✓ clean";
+    L.push(`  ${pad(p.name, nameW)}  ${pad(p.source, srcW)}  ${pad(bundles, 22)}  ${check}`);
+  }
+
+  const flagged = plugins.filter((p) => p.findings.length);
+  if (flagged.length) {
+    L.push("");
+    L.push(`NEEDS ATTENTION  (${flagged.length})`);
+    for (const p of flagged) {
+      L.push("");
+      L.push(`  ${p.errorCount ? "✗" : "⚠"} ${p.name}   (${p.source})`);
+      for (const { file, finding: f } of p.findings) {
+        L.push(`     • [${f.severity}] ${file}: ${f.message}${f.line ? ` (line ${f.line})` : ""}`);
+      }
+    }
+  }
+
+  L.push("");
+  L.push("─".repeat(78));
+  L.push("Audits bundled skills + MCP configs. Hooks and loose scripts are NOT yet scanned,");
+  L.push("so a clean plugin means its skills/MCP are clean — not that the plugin is safe.");
+  return L.join("\n");
+}
+
 /** Compact one-line-per-skill listing of what's installed. */
 export function renderList(report: ManifestReport): string {
   const { rows } = report;

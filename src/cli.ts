@@ -26,8 +26,10 @@ import {
   renderCheckJson,
   renderList,
   renderPickList,
+  renderPlugins,
 } from "./render.js";
 import { renderManifestSarif } from "./sarif.js";
+import { discoverPlugins } from "./plugins.js";
 import {
   stageSource,
   planInstall,
@@ -63,7 +65,7 @@ function scopesFromFlags(
   return [projectScope(projectRoot)];
 }
 
-const VERSION = "0.2.4"; // keep in sync with package.json
+const VERSION = "0.3.0"; // keep in sync with package.json
 
 /** Read one line from stdin (interactive skill selection). */
 function promptLine(question: string): Promise<string> {
@@ -107,6 +109,8 @@ Usage:
                               and choose which to install (not the whole repo).
                               Picks interactively, or: --only <names> / --pick <nums>.
   preflight remove <name>     Move an installed skill to .preflight-trash/ (needs --yes).
+  preflight plugins           Audit installed plugins (~/.claude/plugins): source,
+                              what each bundles, and a scan of its skills + MCP config.
 
 Scope (list/manifest/check/add/remove):
   (default)                   project skills — ./.claude/skills
@@ -442,6 +446,20 @@ function runRemove(argv: string[], out: (s: string) => void, err: (s: string) =>
   return 0;
 }
 
+function runPlugins(argv: string[], out: (s: string) => void, err: (s: string) => void): number {
+  let values: Record<string, unknown>;
+  try {
+    values = parseArgs({ args: argv, allowPositionals: false, options: { json: { type: "boolean" } } }).values;
+  } catch (e) {
+    err(`preflight: ${(e as Error).message}\n`);
+    return 2;
+  }
+  const plugins = discoverPlugins();
+  out((values.json ? JSON.stringify({ plugins }, null, 2) : renderPlugins(plugins)) + "\n");
+  // Advisory audit: exit 1 if any plugin has an error-level finding.
+  return plugins.some((p) => p.errorCount > 0) ? 1 : 0;
+}
+
 export async function run(
   argv: string[],
   out: (s: string) => void = (s) => void process.stdout.write(s),
@@ -462,6 +480,7 @@ export async function run(
   if (sub === "check") return runCheck(argv.slice(1), out, err);
   if (sub === "add") return runAdd(argv.slice(1), out, err);
   if (sub === "remove") return runRemove(argv.slice(1), out, err);
+  if (sub === "plugins") return runPlugins(argv.slice(1), out, err);
   err(`preflight: unknown command "${sub}" (try: preflight --help)\n`);
   return 2;
 }
