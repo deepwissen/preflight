@@ -98,40 +98,53 @@ function engineVersion(): string | null {
   }
 }
 
-const HELP = `preflight — get your AI agent flight-ready.
+const HELP = `preflight — see and scan the skills your AI agent carries, before you trust them.
 
-Usage:
-  preflight list [path]       Compact list of the skills your agent carries.
-  preflight manifest [path]   Full inventory — scope, token footprint, scan of each.
-  preflight check <skill>     Drill into one skill (by name or path): full scope,
-                              footprint, and every finding with its fix.
-  preflight add <source>      Stage skills (local path or owner/repo), scan them,
-                              and choose which to install (not the whole repo).
-                              Picks interactively, or: --only <names> / --pick <nums>.
-  preflight remove <name>     Move an installed skill to .preflight-trash/ (needs --yes).
-  preflight plugins           Audit installed plugins (~/.claude/plugins): source,
-                              what each bundles, and a scan of its skills + MCP config.
+A "skill" is a file your Claude Code agent loads and obeys (in .claude/skills/). You
+install them from the internet — so preflight lets you SEE what you have, SCAN each
+for risks (secrets, prompt-injection, over-broad access), and CHOOSE what to keep.
+Everything runs locally — nothing is sent anywhere, and a clean scan never means "safe".
 
-Scope (list/manifest/check/add/remove):
-  (default)                   project skills — ./.claude/skills
-  --global                    personal skills — ~/.claude/skills
-  --all                       (list/manifest) both, with a WHERE column
+New here? Try:
+  preflight list              What skills do I have?
+  preflight check <name>      Is this one safe?  (shows a HEALTH verdict)
+  preflight add owner/repo    Scan a repo's skills, then pick which to install
+
+Examples:
+  preflight list --all                        project AND personal (~/.claude) skills
+  preflight add anthropics/skills --pick 1,3  clone, scan, install just #1 and #3
+  preflight manifest --fail-on warning        fail CI if a committed skill is risky
+  preflight plugins                           audit your installed plugins too
+
+Commands:
+  list [path]        Quick list of your skills (name · scope · check).
+  manifest [path]    Full inventory — scope, token cost, and a scan of each.
+  check <skill>      Drill into one skill: scope, cost, and every finding + its fix.
+  add <source>       Scan skills from a path or owner/repo, then choose what to install.
+  remove <name>      Move an installed skill to .preflight-trash/ (needs --yes).
+  plugins            Audit installed plugins (~/.claude/plugins): where each came from + a scan.
+
+Scope (list / manifest / check / add / remove):
+  (default)          this project's skills — ./.claude/skills
+  --global           your personal skills — ~/.claude/skills
+  --all              both at once (list / manifest), with a WHERE column
 
 Options:
-  --json                      Machine-readable output
-  --sarif                     SARIF 2.1.0 → GitHub code scanning annotations
-  --fail-on <level>           Exit non-zero on: error (default) | warning | any
-  --only <names>              (add) install only these skills (comma-separated)
-  --pick <nums>               (add) install these by number: 1,4,6 / 1-3 / all
-  --force                     (add) install despite findings
-  --overwrite                 (add) replace a skill that's already installed
-  --dry-run                   (add) scan and report, install nothing
-  --yes                       (remove) actually move the skill to trash
-  -v, --version               Print version
-  -h, --help                  Print help
+  --json             Machine-readable output
+  --sarif            SARIF 2.1.0 → GitHub code scanning annotations
+  --fail-on <level>  Exit non-zero on: error (default) | warning | any
+  --only <names>     (add) install only these skills, comma-separated
+  --pick <nums>      (add) install these by number: 1,4,6 / 1-3 / all
+  --force            (add) install despite findings
+  --overwrite        (add) replace a skill that's already installed
+  --dry-run          (add) scan and report, install nothing
+  --yes              (remove) actually move the skill to trash
+  -v, --version      Print version
+  -h, --help         Print this help
 
-Scope is what each skill DECLARES; a scan finds known-bad patterns but never
-certifies a skill safe. All analysis is local — nothing is sent anywhere.`;
+A scan finds known-bad patterns but never certifies a skill "safe" — a clean result
+means nothing was *found*, not that nothing is there.
+Docs: https://github.com/deepwissen/preflight`;
 
 function runManifest(argv: string[], out: (s: string) => void, err: (s: string) => void): number {
   let values: Record<string, unknown>;
