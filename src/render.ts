@@ -35,10 +35,26 @@ function pad(s: string, w: number): string {
   return s.length >= w ? s.slice(0, w) : s + " ".repeat(w - s.length);
 }
 
-function checkCell(r: SkillRow): string {
-  if (r.errorCount) return `✗ ${r.errorCount} issue${r.errorCount > 1 ? "s" : ""}`;
-  if (r.warnCount) return `⚠ ${r.warnCount} issue${r.warnCount > 1 ? "s" : ""}`;
+// Unified per-skill status vocabulary used everywhere: ✓ clean · ⚠ N · ✗ N.
+function checkLabel(r: SkillRow): string {
+  const total = r.errorCount + r.warnCount;
+  if (r.errorCount) return `✗ ${total} issue${total > 1 ? "s" : ""}`;
+  if (r.warnCount) return `⚠ ${total} issue${total > 1 ? "s" : ""}`;
   return "✓ clean";
+}
+
+/** One-line, answer-first summary for list/manifest: mark + counts + per-prompt cost. */
+export function summaryLine(report: ManifestReport): string {
+  const rows = report.rows;
+  if (rows.length === 0) return "✓ no skills";
+  const need = rows.filter((r) => flatFindings(r).length > 0).length;
+  const conflicts = detectCollisions(rows).length + detectAmbiguities(rows).length;
+  const mark = rows.some((r) => r.errorCount > 0) ? "✗" : need || conflicts ? "⚠" : "✓";
+  const parts: string[] = [`${rows.length} skill${rows.length === 1 ? "" : "s"}`];
+  parts.push(need ? `${need} need${need === 1 ? "s" : ""} attention` : "all clean");
+  if (conflicts) parts.push(`${conflicts} conflict${conflicts === 1 ? "" : "s"}`);
+  parts.push(`~${tok(report.alwaysTotal)}t/prompt`);
+  return `${mark} ${parts.join(" · ")}`;
 }
 
 /** Render the agent-skill manifest as the human "loadout" screen. */
@@ -54,7 +70,7 @@ export function renderManifest(report: ManifestReport): string {
   const whereHdr = showWhere ? `${pad("WHERE", 8)}  ` : "";
   const L: string[] = [];
 
-  L.push("Preflight · manifest");
+  L.push(`preflight · ${summaryLine(report)}`);
   L.push(report.root);
   L.push("");
   L.push("AGENT LOADOUT — what your agent is carrying");
@@ -69,7 +85,7 @@ export function renderManifest(report: ManifestReport): string {
       `  ${pad((r.name ?? r.path) + flag, nameW + 2)}${pad(r.scopeLabel, scopeW)}  ${where}${pad(
         tok(r.alwaysTokens) + "t",
         7
-      )}  ${pad(tok(r.onDemandTokens) + "t", 9)}  ${checkCell(r)}`
+      )}  ${pad(tok(r.onDemandTokens) + "t", 9)}  ${checkLabel(r)}`
     );
   }
   L.push("");
@@ -143,14 +159,14 @@ export function renderList(report: ManifestReport): string {
   const nameW = Math.max(4, ...rows.map((r) => (r.name ?? r.path).length));
   const scopeW = Math.max(10, ...rows.map((r) => r.scopeLabel.length));
   const showWhere = rows.some((r) => r.origin);
-  const lines = rows.map((r) => {
-    const check = r.errorCount ? `✗ ${r.errorCount}` : r.warnCount ? `⚠ ${r.warnCount}` : "✓";
+  const lines: string[] = [`preflight · ${summaryLine(report)}`, ""];
+  for (const r of rows) {
     const where = showWhere ? `${pad(r.origin ?? "", 8)}  ` : "";
-    return `  ${pad(r.name ?? r.path, nameW)}  ${pad(r.scopeLabel, scopeW)}  ${where}${check}`;
-  });
+    lines.push(`  ${pad(r.name ?? r.path, nameW)}  ${pad(r.scopeLabel, scopeW)}  ${where}${checkLabel(r)}`);
+  }
   const nConflict = detectCollisions(rows).length + detectAmbiguities(rows).length;
   if (nConflict) {
-    lines.push(`  ⚠ ${nConflict} conflict(s) — run: preflight manifest${showWhere ? " --all" : ""}`);
+    lines.push("", `  ⚠ ${nConflict} conflict(s) — run: preflight manifest${showWhere ? " --all" : ""}`);
   }
   return lines.join("\n");
 }
