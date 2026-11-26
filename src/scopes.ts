@@ -10,6 +10,7 @@ export interface Scope {
   scanRoot: string; // directory findSkillFiles walks
   skillsDir: string; // where skills are installed / removed
   skip: string[]; // extra directory names to skip while walking scanRoot
+  settingsFiles: string[]; // settings.json files whose `hooks` block to audit
 }
 
 // Claude Code keeps non-skill data under ~/.claude; never walk those when scanning
@@ -29,13 +30,26 @@ const USER_NOISE = [
 /** Project scope: the committed, team-shared skills in <cwd>/.claude/skills. */
 export function projectScope(cwd = process.cwd()): Scope {
   const root = resolve(cwd);
-  return { name: "project", scanRoot: root, skillsDir: join(root, ".claude", "skills"), skip: [] };
+  const claude = join(root, ".claude");
+  return {
+    name: "project",
+    scanRoot: root,
+    skillsDir: join(claude, "skills"),
+    skip: [],
+    settingsFiles: [join(claude, "settings.json"), join(claude, "settings.local.json")],
+  };
 }
 
 /** User scope: personal skills in ~/.claude/skills, shared across all projects. */
 export function userScope(): Scope {
   const base = join(homedir(), ".claude");
-  return { name: "user", scanRoot: base, skillsDir: join(base, "skills"), skip: USER_NOISE };
+  return {
+    name: "user",
+    scanRoot: base,
+    skillsDir: join(base, "skills"),
+    skip: USER_NOISE,
+    settingsFiles: [join(base, "settings.json"), join(base, "settings.local.json")],
+  };
 }
 
 /** Pick the scopes a command should act on from --global / --all flags. */

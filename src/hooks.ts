@@ -1,11 +1,16 @@
 import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname, basename, isAbsolute } from "node:path";
 import { scanCode, type Finding } from "./scan.js";
 
 /**
- * Hook-risk analysis for a plugin's hooks/hooks.json. Hooks are the
- * highest-privilege plugin component — they run commands automatically on events
- * (PreToolUse, SessionStart, …) with no per-run approval. We can't stop them
+ * Hook-risk analysis. Hooks are the highest-privilege Claude Code component —
+ * they run commands automatically on events (PreToolUse, SessionStart, …) with no
+ * per-run approval. They live in two places: bundled in a plugin
+ * (hooks/hooks.json, see scanHooks) and configured in a settings.json — project
+ * .claude/settings.json or ~/.claude/settings.json (see scanSettingsHooks). The
+ * settings.json surface is the more dangerous one: a repo you clone can ship a
+ * .claude/settings.json whose PreToolUse command runs the moment you use the
+ * agent in that directory (the "rules-file backdoor" shape). We can't stop hooks
  * running, but we can surface (a) that they run and on what, and (b) dangerous
  * command patterns in the inline command or the bundled script it invokes.
  */
@@ -64,31 +69,52 @@ const EXT_LANG: Record<string, string> = {
   rb: "ruby", pl: "perl", ps1: "powershell",
 };
 
-/** A bundled script a hook command invokes via ${CLAUDE_PLUGIN_ROOT}/... */
-function hookScript(cmd: string, pluginDir: string): { abs: string; rel: string; lang: string } | null {
+type ScriptRef = { abs: string; rel: string; lang: string };
+type ScriptResolver = (cmd: string) => ScriptRef | null;
+
+/** A bundled script a plugin hook invokes via ${CLAUDE_PLUGIN_ROOT}/... */
+function pluginScript(cmd: string, pluginDir: string): ScriptRef | null {
   const m = /(?:\$\{?CLAUDE_PLUGIN_ROOT\}?\/)([\w./-]+\.(sh|bash|zsh|py|js|cjs|mjs|ts|rb|pl|ps1))/i.exec(cmd);
   if (!m) return null;
   return { abs: join(pluginDir, m[1]), rel: m[1], lang: EXT_LANG[m[2].toLowerCase()] ?? "shellscript" };
 }
 
-export function scanHooks(pluginDir: string): Finding[] {
-  const hj = join(pluginDir, "hooks", "hooks.json");
-  if (!existsSync(hj)) return [];
+/** A script a settings.json hook invokes — absolute, relative to the settings dir,
+ *  or under $CLAUDE_PROJECT_DIR (the project root, not the .claude dir). Conservative:
+ *  a single literal script-path token. Harmless if it mis-resolves — the caller only
+ *  scans it when the file exists. */
+function settingsScript(cmd: string, baseDir: string, projectDir?: string): ScriptRef | null {
+  const m = /(\$\{?CLAUDE_PROJECT_DIR\}?\/)?((?:\.?\.?\/)?[\w./-]+\.(sh|bash|zsh|py|js|cjs|mjs|ts|rb|pl|ps1))\b/i.exec(cmd);
+  if (!m) return null;
+  const usedProjectDir = Boolean(m[1]);
+  const rel = m[2];
+  let abs: string;
+  if (isAbsolute(rel)) abs = rel;
+  else if (usedProjectDir) {
+    if (!projectDir) return null; // $CLAUDE_PROJECT_DIR unknown (e.g. user-level settings)
+    abs = join(projectDir, rel);
+  } else abs = join(baseDir, rel);
+  return { abs, rel, lang: EXT_LANG[m[3].toLowerCase()] ?? "shellscript" };
+}
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(hj, "utf8"));
-  } catch {
-    return [{ severity: "warning", rule: "hook-unparseable", message: "hooks.json is not valid JSON — can't audit it", suggestion: "fix the JSON so its hooks can be reviewed" }];
-  }
-  const root = (parsed as { hooks?: unknown })?.hooks ?? parsed;
-  if (!root || typeof root !== "object") return [];
+function unparseable(label: string): Finding {
+  return {
+    severity: "warning",
+    rule: "hook-unparseable",
+    message: `${label} is not valid JSON — can't audit its hooks`,
+    suggestion: "fix the JSON so its hooks can be reviewed",
+  };
+}
 
+/** Walk a parsed hooks map (`{ EventName: [{ matcher?, hooks: [{type,command}] }] }`),
+ *  flag dangerous commands and the scripts they invoke, and emit one transparency
+ *  line listing the events that auto-run. `resolve` finds a bundled script per surface. */
+function walkHooks(root: Record<string, unknown>, resolve: ScriptResolver): Finding[] {
   const findings: Finding[] = [];
   const events: string[] = [];
   const scannedScripts = new Set<string>();
 
-  for (const [event, matchers] of Object.entries(root as Record<string, unknown>)) {
+  for (const [event, matchers] of Object.entries(root)) {
     if (!Array.isArray(matchers)) continue;
     for (const m of matchers as Array<{ matcher?: string; hooks?: Array<{ type?: string; command?: string }> }>) {
       const tag = `${event}${m?.matcher ? `(${m.matcher})` : ""}`;
@@ -97,7 +123,7 @@ export function scanHooks(pluginDir: string): Finding[] {
         if (h?.type !== "command" || typeof h.command !== "string") continue;
         findings.push(...dangerousFindings(h.command, `hook ${tag} command`));
 
-        const sc = hookScript(h.command, pluginDir);
+        const sc = resolve(h.command);
         if (sc && !scannedScripts.has(sc.abs) && existsSync(sc.abs)) {
           scannedScripts.add(sc.abs);
           let content = "";
@@ -124,4 +150,39 @@ export function scanHooks(pluginDir: string): Finding[] {
     });
   }
   return findings;
+}
+
+/** Hook-risk analysis for a plugin's hooks/hooks.json. */
+export function scanHooks(pluginDir: string): Finding[] {
+  const hj = join(pluginDir, "hooks", "hooks.json");
+  if (!existsSync(hj)) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(hj, "utf8"));
+  } catch {
+    return [unparseable("hooks.json")];
+  }
+  const root = (parsed as { hooks?: unknown })?.hooks ?? parsed;
+  if (!root || typeof root !== "object") return [];
+  return walkHooks(root as Record<string, unknown>, (cmd) => pluginScript(cmd, pluginDir));
+}
+
+/** Hook-risk analysis for hooks configured in a settings.json (project or user).
+ *  Only the `hooks` block is read — the rest of the file is ignored. */
+export function scanSettingsHooks(settingsPath: string): Finding[] {
+  if (!existsSync(settingsPath)) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(settingsPath, "utf8"));
+  } catch {
+    return [unparseable(basename(settingsPath))];
+  }
+  const root = (parsed as { hooks?: unknown })?.hooks;
+  if (!root || typeof root !== "object") return [];
+  const base = dirname(settingsPath);
+  // $CLAUDE_PROJECT_DIR is the project root — the dir containing .claude.
+  const projectDir = basename(base) === ".claude" ? dirname(base) : undefined;
+  return walkHooks(root as Record<string, unknown>, (cmd) => settingsScript(cmd, base, projectDir));
 }

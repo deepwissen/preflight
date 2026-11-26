@@ -65,7 +65,7 @@ function scopesFromFlags(
   return [projectScope(projectRoot)];
 }
 
-const VERSION = "0.3.1"; // keep in sync with package.json
+const VERSION = "0.3.2"; // keep in sync with package.json
 
 /** Read one line from stdin (interactive skill selection). */
 function promptLine(question: string): Promise<string> {
@@ -249,6 +249,7 @@ function runCheck(argv: string[], out: (s: string) => void, err: (s: string) => 
     rows: [row],
     alwaysTotal: row.alwaysTokens,
     onDemandTotal: row.onDemandTokens,
+    settingsHooks: [],
   };
   out(
     (values.sarif
@@ -393,6 +394,7 @@ async function runAdd(
       rows: selected.map((s) => s.row),
       alwaysTotal: selected.reduce((n, s) => n + s.row.alwaysTokens, 0),
       onDemandTotal: selected.reduce((n, s) => n + s.row.onDemandTokens, 0),
+      settingsHooks: [],
     };
     if (exitForReport(report, failOn as FailOn) === 1 && !values.force) {
       const bad = selected.filter((s) => s.row.errorCount || s.row.warnCount).map((s) => s.name);

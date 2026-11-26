@@ -57,7 +57,7 @@ describe("scopeSkillNames", () => {
   afterAll(() => rmSync(base, { recursive: true, force: true }));
 
   it("reads the declared frontmatter name (lowercased)", () => {
-    const scope: Scope = { name: "user", scanRoot: base, skillsDir: join(base, "skills"), skip: [] };
+    const scope: Scope = { name: "user", scanRoot: base, skillsDir: join(base, "skills"), skip: [], settingsFiles: [] };
     const names = scopeSkillNames(scope).sort();
     expect(names).toEqual(["declared-name", "deploy"]);
   });

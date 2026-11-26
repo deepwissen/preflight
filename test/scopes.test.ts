@@ -34,12 +34,14 @@ const projectScope = (): Scope => ({
   scanRoot: projRoot,
   skillsDir: join(projRoot, ".claude", "skills"),
   skip: [],
+  settingsFiles: [],
 });
 const userScope = (): Scope => ({
   name: "user",
   scanRoot: userRoot,
   skillsDir: join(userRoot, "skills"),
   skip: ["projects"],
+  settingsFiles: [],
 });
 
 describe("buildScopes", () => {

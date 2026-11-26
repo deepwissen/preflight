@@ -41,12 +41,14 @@ const projectScope = (): Scope => ({
   scanRoot: proj,
   skillsDir: join(proj, ".claude", "skills"),
   skip: [],
+  settingsFiles: [],
 });
 const userScope = (): Scope => ({
   name: "user",
   scanRoot: user,
   skillsDir: join(user, "skills"),
   skip: [],
+  settingsFiles: [],
 });
 
 describe("detectCollisions", () => {
