@@ -3,16 +3,17 @@ import { join, dirname, basename, isAbsolute } from "node:path";
 import { scanCode, type Finding } from "./scan.js";
 
 /**
- * Hook-risk analysis. Hooks are the highest-privilege Claude Code component —
- * they run commands automatically on events (PreToolUse, SessionStart, …) with no
- * per-run approval. They live in two places: bundled in a plugin
- * (hooks/hooks.json, see scanHooks) and configured in a settings.json — project
- * .claude/settings.json or ~/.claude/settings.json (see scanSettingsHooks). The
- * settings.json surface is the more dangerous one: a repo you clone can ship a
- * .claude/settings.json whose PreToolUse command runs the moment you use the
- * agent in that directory (the "rules-file backdoor" shape). We can't stop hooks
- * running, but we can surface (a) that they run and on what, and (b) dangerous
- * command patterns in the inline command or the bundled script it invokes.
+ * Config-risk analysis for Claude Code settings. Two surfaces:
+ *   - a plugin's bundled hooks/hooks.json (see scanHooks)
+ *   - a settings.json — project .claude/settings.json or ~/.claude/settings.json
+ *     (see scanSettings), which carries more than hooks: apiKeyHelper, env,
+ *     permissions, and plugin-marketplace keys.
+ * The settings.json surface is the dangerous one: a repo you clone can ship a
+ * .claude/settings.json whose PreToolUse hook (or apiKeyHelper, or env base-URL
+ * redirect) runs the moment you use the agent in that directory — the
+ * "rules-file backdoor" shape. We can't stop these running, but we can surface
+ * (a) that they run and on what, and (b) dangerous values in the command, the
+ * bundled script it invokes, the args array, an http endpoint, or the config keys.
  */
 
 const DANGEROUS: Array<{ re: RegExp; rule: string; severity: Finding["severity"]; what: string }> = [
@@ -101,29 +102,65 @@ function unparseable(label: string): Finding {
   return {
     severity: "warning",
     rule: "hook-unparseable",
-    message: `${label} is not valid JSON — can't audit its hooks`,
-    suggestion: "fix the JSON so its hooks can be reviewed",
+    message: `${label} is not valid JSON — can't audit it`,
+    suggestion: "fix the JSON so its hooks and config can be reviewed",
   };
 }
 
-/** Walk a parsed hooks map (`{ EventName: [{ matcher?, hooks: [{type,command}] }] }`),
- *  flag dangerous commands and the scripts they invoke, and emit one transparency
- *  line listing the events that auto-run. `resolve` finds a bundled script per surface. */
+// Events that fire before the workspace-trust prompt, or on every message — a
+// cloned repo's hook on these runs before you get a chance to approve it.
+const SENSITIVE_EVENTS = new Set(["SessionStart", "Setup", "UserPromptSubmit", "UserPromptExpansion"]);
+
+type HookEntry = { type?: string; command?: unknown; args?: unknown; url?: unknown };
+
+/** The full shell text of a hook: its command plus any args. Dangerous payloads
+ *  often live in args (e.g. {command:"bash", args:["-c","curl … | sh"]}). */
+function hookCommandText(h: HookEntry): string {
+  const parts: string[] = [];
+  if (typeof h.command === "string") parts.push(h.command);
+  if (Array.isArray(h.args)) for (const a of h.args) if (typeof a === "string") parts.push(a);
+  return parts.join(" ");
+}
+
+/** An http hook posts the hook payload (prompts, tool inputs) to a URL. A remote,
+ *  non-loopback endpoint is an exfiltration channel; localhost is a benign local server. */
+function httpHookFindings(url: string, tag: string): Finding[] {
+  if (/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(?:[:/]|$)/i.test(url.trim())) return [];
+  return [
+    {
+      severity: "warning",
+      rule: "hook-http-endpoint",
+      message: `hook ${tag} posts to an external URL: ${truncate(url)}`,
+      suggestion: "this sends hook payloads (prompts, tool inputs) to a remote server on every event — confirm you trust it",
+    },
+  ];
+}
+
+/** Walk a parsed hooks map (`{ EventName: [{ matcher?, hooks: [{type,command,args,url}] }] }`),
+ *  flag dangerous commands/args, the scripts they invoke, http endpoints, and sensitive
+ *  events, and emit one transparency line listing the events that auto-run. */
 function walkHooks(root: Record<string, unknown>, resolve: ScriptResolver): Finding[] {
   const findings: Finding[] = [];
   const events: string[] = [];
+  const sensitive = new Set<string>();
   const scannedScripts = new Set<string>();
 
   for (const [event, matchers] of Object.entries(root)) {
     if (!Array.isArray(matchers)) continue;
-    for (const m of matchers as Array<{ matcher?: string; hooks?: Array<{ type?: string; command?: string }> }>) {
+    for (const m of matchers as Array<{ matcher?: string; hooks?: HookEntry[] }>) {
       const tag = `${event}${m?.matcher ? `(${m.matcher})` : ""}`;
       events.push(tag);
+      if (SENSITIVE_EVENTS.has(event)) sensitive.add(event);
       for (const h of m?.hooks ?? []) {
-        if (h?.type !== "command" || typeof h.command !== "string") continue;
-        findings.push(...dangerousFindings(h.command, `hook ${tag} command`));
+        if (h?.type === "http" && typeof h.url === "string") {
+          findings.push(...httpHookFindings(h.url, tag));
+          continue;
+        }
+        const cmdText = hookCommandText(h);
+        if (!cmdText) continue; // non-shell hook type (prompt/agent/mcp_tool) — nothing to scan
+        findings.push(...dangerousFindings(cmdText, `hook ${tag} command`));
 
-        const sc = resolve(h.command);
+        const sc = resolve(cmdText);
         if (sc && !scannedScripts.has(sc.abs) && existsSync(sc.abs)) {
           scannedScripts.add(sc.abs);
           let content = "";
@@ -149,7 +186,20 @@ function walkHooks(root: Record<string, unknown>, resolve: ScriptResolver): Find
       suggestion: "these commands run without approval on those events — know what they do",
     });
   }
+  if (sensitive.size) {
+    findings.push({
+      severity: "warning",
+      rule: "hook-sensitive-event",
+      message: `hooks run on ${[...sensitive].join(", ")} — these fire before the workspace-trust prompt or on every message`,
+      suggestion: "a cloned repo's hook on these events runs before you approve it — review the command above",
+    });
+  }
   return findings;
+}
+
+function truncate(s: string, n = 90): string {
+  const flat = s.replace(/\s+/g, " ").trim();
+  return flat.length > n ? flat.slice(0, n - 1) + "…" : flat;
 }
 
 /** Hook-risk analysis for a plugin's hooks/hooks.json. */
@@ -168,9 +218,152 @@ export function scanHooks(pluginDir: string): Finding[] {
   return walkHooks(root as Record<string, unknown>, (cmd) => pluginScript(cmd, pluginDir));
 }
 
-/** Hook-risk analysis for hooks configured in a settings.json (project or user).
- *  Only the `hooks` block is read — the rest of the file is ignored. */
-export function scanSettingsHooks(settingsPath: string): Finding[] {
+// --- settings.json config-risk checks (beyond hooks) ---
+
+// A permissions.allow entry that grants a whole tool with no real constraint.
+const BARE_OR_WILDCARD_ALLOW = /^(Bash|WebFetch|WebSearch|Write|Edit|NotebookEdit)(\(\s*:?\*?\s*\))?$/;
+// A permissions.allow entry that pre-approves a high-risk shell command.
+const RISKY_BASH_ALLOW =
+  /^Bash\(\s*(?:sudo|rm|curl|wget|eval|exec|chmod|chown|ssh|scp|nc|ncat|bash|sh|zsh|python3?|node|dd|mkfs|:)\b/i;
+// An additionalDirectories entry that reaches home or root.
+const BROAD_DIR = /^(~|\/|\$HOME|~\/|\/\*{1,2}|\$HOME\/?)$/;
+// Hosts that legitimately terminate Anthropic API traffic.
+const OFFICIAL_ANTHROPIC_HOST = /(?:^|\.)anthropic\.com$|(?:^|\.)claude\.(?:ai|com)$/i;
+
+function hostOf(url: string): string | null {
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/\s:]+)/i.exec(url.trim());
+  return m ? m[1] : null;
+}
+
+function scanApiKeyHelper(v: unknown): Finding[] {
+  if (typeof v !== "string" || !v.trim()) return [];
+  return [
+    {
+      severity: "error",
+      rule: "config-apikeyhelper",
+      message: `apiKeyHelper runs a shell command to obtain credentials: ${truncate(v)}`,
+      suggestion: "this command runs automatically to fetch an API key — vet it or remove it if you didn't add it",
+    },
+    ...dangerousFindings(v, "apiKeyHelper command"),
+  ];
+}
+
+function scanEnv(env: unknown): Finding[] {
+  if (!env || typeof env !== "object") return [];
+  const e = env as Record<string, unknown>;
+  const out: Finding[] = [];
+  for (const [k, v] of Object.entries(e)) {
+    if (typeof v !== "string") continue;
+    if (/_BASE_URL$|_API_URL$/i.test(k)) {
+      const host = hostOf(v);
+      if (host && !OFFICIAL_ANTHROPIC_HOST.test(host)) {
+        out.push({
+          severity: "error",
+          rule: "config-env-base-url",
+          message: `env.${k} redirects API traffic to ${host}`,
+          suggestion: "a non-Anthropic base URL can route your prompts and API keys through a third party — confirm you set this",
+        });
+      }
+    }
+  }
+  // Run the env block through the secret scanner — catches hardcoded keys/tokens.
+  const envText = Object.entries(e)
+    .filter(([, v]) => typeof v === "string")
+    .map(([k, v]) => `${k}=${v}`)
+    .join("\n");
+  if (envText) {
+    for (const f of scanCode("settings.env", envText, "shellscript")) {
+      out.push({ ...f, message: `env block: ${f.message}` });
+    }
+  }
+  return out;
+}
+
+function scanPermissions(perms: unknown): Finding[] {
+  if (!perms || typeof perms !== "object") return [];
+  const p = perms as Record<string, unknown>;
+  const out: Finding[] = [];
+
+  if (p.defaultMode === "bypassPermissions" || p.defaultMode === "auto") {
+    out.push({
+      severity: "warning",
+      rule: "config-bypass-mode",
+      message: `permissions.defaultMode is "${p.defaultMode}" — ${
+        p.defaultMode === "bypassPermissions" ? "skips approval prompts" : "lets a classifier auto-approve instead of you"
+      }`,
+      suggestion: "a repo that sets this weakens the approval gate — prefer leaving defaultMode unset",
+    });
+  }
+
+  if (Array.isArray(p.allow)) {
+    for (const entry of p.allow) {
+      if (typeof entry !== "string") continue;
+      const e = entry.trim();
+      if (BARE_OR_WILDCARD_ALLOW.test(e)) {
+        out.push({
+          severity: "warning",
+          rule: "config-broad-allow",
+          message: `permissions.allow pre-approves a broad capability: "${e}"`,
+          suggestion: "this auto-approves the tool with no constraint once the repo is trusted — narrow it or remove it",
+        });
+      } else if (RISKY_BASH_ALLOW.test(e)) {
+        out.push({
+          severity: "warning",
+          rule: "config-broad-allow",
+          message: `permissions.allow pre-approves a dangerous command: "${truncate(e)}"`,
+          suggestion: "this auto-approves a high-risk command once the repo is trusted — review it",
+        });
+      }
+    }
+  }
+
+  if (Array.isArray(p.additionalDirectories)) {
+    for (const d of p.additionalDirectories) {
+      if (typeof d === "string" && BROAD_DIR.test(d.trim())) {
+        out.push({
+          severity: "warning",
+          rule: "config-broad-dir",
+          message: `permissions.additionalDirectories grants broad file access: "${d}"`,
+          suggestion: "this widens what the agent can read and write beyond the project — scope it down",
+        });
+      }
+    }
+  }
+  return out;
+}
+
+function scanSupplyChain(s: Record<string, unknown>): Finding[] {
+  const out: Finding[] = [];
+  const mkts = s.extraKnownMarketplaces;
+  const mktNames = mkts && typeof mkts === "object" ? Object.keys(mkts as object) : [];
+  if (mktNames.length) {
+    out.push({
+      severity: "warning",
+      rule: "config-extra-marketplace",
+      message: `adds plugin marketplace(s): ${mktNames.join(", ")}`,
+      suggestion: "plugins from an added marketplace run with your agent — scan them (`preflight plugins`) before trusting",
+    });
+  }
+  const plugins = s.enabledPlugins;
+  const plist = Array.isArray(plugins)
+    ? plugins
+    : plugins && typeof plugins === "object"
+      ? Object.keys(plugins as object)
+      : [];
+  if (plist.length) {
+    out.push({
+      severity: "info",
+      rule: "config-enabled-plugins",
+      message: `auto-enables plugin(s): ${plist.slice(0, 8).join(", ")}${plist.length > 8 ? "…" : ""}`,
+      suggestion: "these plugins load automatically — run `preflight plugins` to audit them",
+    });
+  }
+  return out;
+}
+
+/** Config-risk analysis for a settings.json (project or user): hooks, apiKeyHelper,
+ *  env, permissions, and plugin-marketplace keys. Read-only; the file is never changed. */
+export function scanSettings(settingsPath: string): Finding[] {
   if (!existsSync(settingsPath)) return [];
 
   let parsed: unknown;
@@ -179,10 +372,19 @@ export function scanSettingsHooks(settingsPath: string): Finding[] {
   } catch {
     return [unparseable(basename(settingsPath))];
   }
-  const root = (parsed as { hooks?: unknown })?.hooks;
-  if (!root || typeof root !== "object") return [];
-  const base = dirname(settingsPath);
-  // $CLAUDE_PROJECT_DIR is the project root — the dir containing .claude.
-  const projectDir = basename(base) === ".claude" ? dirname(base) : undefined;
-  return walkHooks(root as Record<string, unknown>, (cmd) => settingsScript(cmd, base, projectDir));
+  if (!parsed || typeof parsed !== "object") return [];
+  const s = parsed as Record<string, unknown>;
+  const findings: Finding[] = [];
+
+  if (s.hooks && typeof s.hooks === "object") {
+    const base = dirname(settingsPath);
+    // $CLAUDE_PROJECT_DIR is the project root — the dir containing .claude.
+    const projectDir = basename(base) === ".claude" ? dirname(base) : undefined;
+    findings.push(...walkHooks(s.hooks as Record<string, unknown>, (cmd) => settingsScript(cmd, base, projectDir)));
+  }
+  findings.push(...scanApiKeyHelper(s.apiKeyHelper));
+  findings.push(...scanEnv(s.env));
+  findings.push(...scanPermissions(s.permissions));
+  findings.push(...scanSupplyChain(s));
+  return findings;
 }

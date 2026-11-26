@@ -46,35 +46,36 @@ function checkLabel(r: SkillRow): string {
 /** One-line, answer-first summary for list/manifest: mark + counts + per-prompt cost. */
 export function summaryLine(report: ManifestReport): string {
   const rows = report.rows;
-  const hookErr = report.settingsHooks.filter((h) => h.severity === "error").length;
-  const hookWarn = report.settingsHooks.filter((h) => h.severity === "warning").length;
-  const hookIssues = hookErr + hookWarn;
-  if (rows.length === 0 && hookIssues === 0) return "✓ no skills";
+  const cfgErr = report.settingsRisks.filter((h) => h.severity === "error").length;
+  const cfgWarn = report.settingsRisks.filter((h) => h.severity === "warning").length;
+  const cfgIssues = cfgErr + cfgWarn;
+  if (rows.length === 0 && cfgIssues === 0) return "✓ no skills";
   const need = rows.filter((r) => flatFindings(r).length > 0).length;
   const conflicts = detectCollisions(rows).length + detectAmbiguities(rows).length;
-  const anyErr = rows.some((r) => r.errorCount > 0) || hookErr > 0;
-  const mark = anyErr ? "✗" : need || conflicts || hookIssues ? "⚠" : "✓";
+  const anyErr = rows.some((r) => r.errorCount > 0) || cfgErr > 0;
+  const mark = anyErr ? "✗" : need || conflicts || cfgIssues ? "⚠" : "✓";
   const parts: string[] = [`${rows.length} skill${rows.length === 1 ? "" : "s"}`];
   if (need) parts.push(`${need} need${need === 1 ? "s" : ""} attention`);
-  else if (!conflicts && !hookIssues) parts.push("all clean");
+  else if (!conflicts && !cfgIssues) parts.push("all clean");
   if (conflicts) parts.push(`${conflicts} conflict${conflicts === 1 ? "" : "s"}`);
-  if (hookIssues) parts.push(`${hookIssues} hook issue${hookIssues === 1 ? "" : "s"}`);
+  if (cfgIssues) parts.push(`${cfgIssues} config issue${cfgIssues === 1 ? "" : "s"}`);
   parts.push(`~${tok(report.alwaysTotal)}t/prompt`);
   return `${mark} ${parts.join(" · ")}`;
 }
 
-/** The "HOOKS" block — commands your agent runs automatically, from settings.json.
- *  Grouped by file, worst-severity marker per file. Empty when no hooks configured. */
-function hooksSection(report: ManifestReport): string[] {
-  if (report.settingsHooks.length === 0) return [];
+/** The "CONFIG & HOOKS" block — settings.json things your agent loads automatically
+ *  (hooks, apiKeyHelper, env, permissions, marketplaces). Grouped by file, worst-
+ *  severity marker per file. Empty when no settings risks found. */
+function configSection(report: ManifestReport): string[] {
+  if (report.settingsRisks.length === 0) return [];
   const byFile = new Map<string, LocatedFinding[]>();
-  for (const h of report.settingsHooks) {
+  for (const h of report.settingsRisks) {
     const list = byFile.get(h.file) ?? [];
     list.push(h);
     byFile.set(h.file, list);
   }
-  const risky = report.settingsHooks.filter((h) => h.severity !== "info").length;
-  const L: string[] = ["", `HOOKS — commands your agent runs automatically${risky ? `  (${risky} risky)` : ""}`];
+  const risky = report.settingsRisks.filter((h) => h.severity !== "info").length;
+  const L: string[] = ["", `CONFIG & HOOKS — settings your agent loads automatically${risky ? `  (${risky} risky)` : ""}`];
   for (const [file, fs] of byFile) {
     const worst = fs.some((f) => f.severity === "error") ? "✗" : fs.some((f) => f.severity === "warning") ? "⚠" : "ℹ";
     L.push("", `  ${worst} ${file}`);
@@ -86,12 +87,12 @@ function hooksSection(report: ManifestReport): string[] {
 /** Render the agent-skill manifest as the human "loadout" screen. */
 export function renderManifest(report: ManifestReport): string {
   const { rows } = report;
-  if (rows.length === 0 && report.settingsHooks.length === 0) {
+  if (rows.length === 0 && report.settingsRisks.length === 0) {
     return `Preflight · manifest\n${report.root}\n\nNo agent skills found (.claude/skills, commands, agents, or SKILL.md).`;
   }
   if (rows.length === 0) {
-    // No skills, but hooks are configured — still worth surfacing.
-    return [`preflight · ${summaryLine(report)}`, report.root, ...hooksSection(report), ""].join("\n");
+    // No skills, but settings risks are present — still worth surfacing.
+    return [`preflight · ${summaryLine(report)}`, report.root, ...configSection(report), ""].join("\n");
   }
 
   const nameW = Math.max(6, ...rows.map((r) => (r.name ?? r.path).length));
@@ -174,7 +175,7 @@ export function renderManifest(report: ManifestReport): string {
     }
   }
 
-  L.push(...hooksSection(report));
+  L.push(...configSection(report));
 
   L.push("");
   L.push("─".repeat(78));

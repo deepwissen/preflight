@@ -5,7 +5,7 @@ import { extractSkillScope, type SkillScope } from "@deepwissen/preflight-core";
 import { findSkillFiles } from "./discover.js";
 import { scanSkill, type Finding } from "./scan.js";
 import { enumerateBundle, type Bundle } from "./bundle.js";
-import { scanSettingsHooks } from "./hooks.js";
+import { scanSettings } from "./hooks.js";
 import type { Scope, ScopeName } from "./scopes.js";
 
 /** Static token footprint ~ chars/4. Honest approximation for a per-file number;
@@ -75,7 +75,7 @@ export interface ManifestReport {
   rows: SkillRow[];
   alwaysTotal: number;
   onDemandTotal: number;
-  settingsHooks: LocatedFinding[]; // hook-risk findings from scope settings.json files
+  settingsRisks: LocatedFinding[]; // config-risk findings from scope settings.json files
 }
 
 /** Build one skill's row: scope + footprint + scan. `displayPath` is what's shown
@@ -129,18 +129,18 @@ export function reportFindings(report: ManifestReport): LocatedFinding[] {
       }
     }
   }
-  out.push(...report.settingsHooks);
+  out.push(...report.settingsRisks);
   return out;
 }
 
-/** Hook-risk findings from a scope's settings.json files, each as a LocatedFinding
+/** Config-risk findings from a scope's settings.json files, each as a LocatedFinding
  *  with a readable path (project: `.claude/settings.json`; user: `~/.claude/...`). */
-function scopeHookFindings(scope: Scope): LocatedFinding[] {
+function scopeSettingsRisks(scope: Scope): LocatedFinding[] {
   const home = homedir();
   const out: LocatedFinding[] = [];
   for (const sf of scope.settingsFiles) {
     const file = scope.name === "user" ? sf.replace(home, "~") : relative(scope.scanRoot, sf) || sf;
-    for (const f of scanSettingsHooks(sf)) {
+    for (const f of scanSettings(sf)) {
       out.push({ file, rule: f.rule, severity: f.severity, message: f.message, line: f.line });
     }
   }
@@ -165,7 +165,7 @@ export function buildManifest(root: string, skip: Iterable<string> = []): Manife
     rows,
     alwaysTotal: rows.reduce((n, r) => n + r.alwaysTokens, 0),
     onDemandTotal: rows.reduce((n, r) => n + r.onDemandTokens, 0),
-    settingsHooks: [],
+    settingsRisks: [],
   };
 }
 
@@ -174,18 +174,18 @@ export function buildManifest(root: string, skip: Iterable<string> = []): Manife
 export function buildScopes(scopes: Scope[]): ManifestReport {
   const multi = scopes.length > 1;
   const rows: SkillRow[] = [];
-  const settingsHooks: LocatedFinding[] = [];
+  const settingsRisks: LocatedFinding[] = [];
   for (const s of scopes) {
     for (const row of buildManifest(s.scanRoot, s.skip).rows) {
       rows.push(multi ? { ...row, origin: s.name } : row);
     }
-    settingsHooks.push(...scopeHookFindings(s));
+    settingsRisks.push(...scopeSettingsRisks(s));
   }
   return {
     root: multi ? scopes.map((s) => s.name).join(" + ") : scopes[0].scanRoot,
     rows,
     alwaysTotal: rows.reduce((n, r) => n + r.alwaysTokens, 0),
     onDemandTotal: rows.reduce((n, r) => n + r.onDemandTokens, 0),
-    settingsHooks,
+    settingsRisks,
   };
 }
