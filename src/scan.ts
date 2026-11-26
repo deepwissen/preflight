@@ -2,6 +2,7 @@ import {
   scanSecrets,
   scanInstructionIntegrity,
   scanSkillScope,
+  scanAgentConfig,
   scanMcpConfigs,
   detectTraps,
   type ContextSnapshot,
@@ -144,6 +145,28 @@ export function scanCode(path: string, content: string, languageId: string): Fin
       line: lineFrom(w.description),
       suggestion: w.suggestion,
     });
+  }
+  return out;
+}
+
+/**
+ * Scan a settings.json for agent-autonomy risk using the ENGINE's agent-config
+ * scanner — the shared source of truth (same detector vet and the extension use).
+ * Covers the canonical cases: unrestricted allow (Bash(*)/*), skip-permissions
+ * (bypassPermissions), auto-approve edits (acceptEdits), enable-all-MCP. preflight's
+ * own scanSettings adds only what the engine doesn't yet cover (apiKeyHelper, env
+ * base-URL, marketplaces, deep hook analysis) — no overlap, no double-reporting.
+ */
+export function scanAgentConfigFile(path: string, content: string): Finding[] {
+  const snap = emptySnapshot();
+  snap.activeFile = fileInfo(path, content, "json");
+  // The engine appends " (<path>)" to each description; preflight groups findings by
+  // file already, so strip that redundant suffix for a clean message.
+  const suffix = ` (${path})`;
+  const out: Finding[] = [];
+  for (const i of scanAgentConfig(snap, {}).instructionFileIssues ?? []) {
+    const message = i.description.endsWith(suffix) ? i.description.slice(0, -suffix.length) : i.description;
+    out.push({ severity: i.severity ?? "warning", rule: i.issue, message, line: i.lineNumber, suggestion: i.suggestion });
   }
   return out;
 }

@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, basename, isAbsolute } from "node:path";
-import { scanCode, type Finding } from "./scan.js";
+import { scanCode, scanAgentConfigFile, type Finding } from "./scan.js";
 
 /**
  * Config-risk analysis for Claude Code settings. Two surfaces:
@@ -220,11 +220,14 @@ export function scanHooks(pluginDir: string): Finding[] {
 
 // --- settings.json config-risk checks (beyond hooks) ---
 
-// A permissions.allow entry that grants a whole tool with no real constraint.
-const BARE_OR_WILDCARD_ALLOW = /^(Bash|WebFetch|WebSearch|Write|Edit|NotebookEdit)(\(\s*:?\*?\s*\))?$/;
-// A permissions.allow entry that pre-approves a high-risk shell command.
+// A bare non-Bash tool grant with no constraint. (Unrestricted Bash — Bash, Bash(*),
+// and bare * — is owned by the engine's agent-broad-command-allow, so it's excluded
+// here to avoid double-reporting.)
+const BARE_TOOL_ALLOW = /^(WebFetch|WebSearch|Write|Edit|NotebookEdit)(\(\s*:?\*?\s*\))?$/;
+// A permissions.allow entry that pre-approves a high-risk shell command (narrower than
+// the engine's unrestricted-shell rule — a specific dangerous command, not Bash(*)).
 const RISKY_BASH_ALLOW =
-  /^Bash\(\s*(?:sudo|rm|curl|wget|eval|exec|chmod|chown|ssh|scp|nc|ncat|bash|sh|zsh|python3?|node|dd|mkfs|:)\b/i;
+  /^Bash\(\s*(?:sudo|rm|curl|wget|eval|exec|chmod|chown|ssh|scp|nc|ncat|bash|sh|zsh|python3?|node|dd|mkfs)\b/i;
 // An additionalDirectories entry that reaches home or root.
 const BROAD_DIR = /^(~|\/|\$HOME|~\/|\/\*{1,2}|\$HOME\/?)$/;
 // Hosts that legitimately terminate Anthropic API traffic.
@@ -284,13 +287,13 @@ function scanPermissions(perms: unknown): Finding[] {
   const p = perms as Record<string, unknown>;
   const out: Finding[] = [];
 
-  if (p.defaultMode === "bypassPermissions" || p.defaultMode === "auto") {
+  // Note: bypassPermissions is owned by the engine (agent-skip-permissions). Only the
+  // auto classifier mode — which the engine doesn't yet flag — is checked here.
+  if (p.defaultMode === "auto") {
     out.push({
       severity: "warning",
-      rule: "config-bypass-mode",
-      message: `permissions.defaultMode is "${p.defaultMode}" — ${
-        p.defaultMode === "bypassPermissions" ? "skips approval prompts" : "lets a classifier auto-approve instead of you"
-      }`,
+      rule: "config-auto-mode",
+      message: `permissions.defaultMode is "auto" — a classifier auto-approves actions instead of you`,
       suggestion: "a repo that sets this weakens the approval gate — prefer leaving defaultMode unset",
     });
   }
@@ -299,17 +302,17 @@ function scanPermissions(perms: unknown): Finding[] {
     for (const entry of p.allow) {
       if (typeof entry !== "string") continue;
       const e = entry.trim();
-      if (BARE_OR_WILDCARD_ALLOW.test(e)) {
+      if (BARE_TOOL_ALLOW.test(e)) {
         out.push({
           severity: "warning",
-          rule: "config-broad-allow",
+          rule: "config-risky-allow",
           message: `permissions.allow pre-approves a broad capability: "${e}"`,
           suggestion: "this auto-approves the tool with no constraint once the repo is trusted — narrow it or remove it",
         });
       } else if (RISKY_BASH_ALLOW.test(e)) {
         out.push({
           severity: "warning",
-          rule: "config-broad-allow",
+          rule: "config-risky-allow",
           message: `permissions.allow pre-approves a dangerous command: "${truncate(e)}"`,
           suggestion: "this auto-approves a high-risk command once the repo is trusted — review it",
         });
@@ -366,15 +369,28 @@ function scanSupplyChain(s: Record<string, unknown>): Finding[] {
 export function scanSettings(settingsPath: string): Finding[] {
   if (!existsSync(settingsPath)) return [];
 
+  let raw: string;
+  try {
+    raw = readFileSync(settingsPath, "utf8");
+  } catch {
+    return [];
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(settingsPath, "utf8"));
+    parsed = JSON.parse(raw);
   } catch {
     return [unparseable(basename(settingsPath))];
   }
   if (!parsed || typeof parsed !== "object") return [];
   const s = parsed as Record<string, unknown>;
   const findings: Finding[] = [];
+
+  // Engine (shared) agent-autonomy detection — canonical allow/mode/mcp rules, the
+  // same source vet and the extension use. Suppress its shallow agent-auto-run-hook;
+  // our deep hook scan below (args, http, scripts, sensitive events) supersedes it.
+  for (const f of scanAgentConfigFile(settingsPath, raw)) {
+    if (f.rule !== "agent-auto-run-hook") findings.push(f);
+  }
 
   if (s.hooks && typeof s.hooks === "object") {
     const base = dirname(settingsPath);

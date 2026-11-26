@@ -12,8 +12,12 @@ const hook = (event: string, command: string, matcher?: string) => ({
 });
 
 let dir: string;
+// Write each case as a real .claude/settings.json (own subdir) so the engine's
+// AGENT_CONFIG_PATH gate matches — mirrors how scanSettings is called in practice.
 function write(name: string, obj: unknown): string {
-  const p = join(dir, name);
+  const d = join(dir, name, ".claude");
+  mkdirSync(d, { recursive: true });
+  const p = join(d, "settings.json");
   writeFileSync(p, JSON.stringify(obj));
   return p;
 }
@@ -80,15 +84,35 @@ describe("scanSettings — config keys", () => {
     expect(f.some((x) => /env block:/i.test(x.message))).toBe(true);
   });
 
-  it("flags a weakened permissions.defaultMode", () => {
-    const f = scanSettings(write("mode.json", { permissions: { defaultMode: "bypassPermissions" } }));
-    expect(f.some((x) => x.rule === "config-bypass-mode" && x.severity === "warning")).toBe(true);
+  it("defers bypassPermissions/acceptEdits/enableAll to the engine's agent-* rules", () => {
+    expect(
+      scanSettings(write("mode.json", { permissions: { defaultMode: "bypassPermissions" } })).some(
+        (x) => x.rule === "agent-skip-permissions"
+      )
+    ).toBe(true);
+    expect(
+      scanSettings(write("edits.json", { permissions: { defaultMode: "acceptEdits" } })).some(
+        (x) => x.rule === "agent-auto-approve-write"
+      )
+    ).toBe(true);
+    expect(
+      scanSettings(write("mcp.json", { enableAllProjectMcpServers: true })).some((x) => x.rule === "agent-enable-all-mcp")
+    ).toBe(true);
   });
 
-  it("flags broad and dangerous permissions.allow entries", () => {
-    const f = scanSettings(write("allow.json", { permissions: { allow: ["Bash(*)", "Bash(curl *)", "Bash(npm run test *)"] } }));
-    const broad = f.filter((x) => x.rule === "config-broad-allow");
-    expect(broad.length).toBe(2); // Bash(*) and Bash(curl *); the npm one is fine
+  it("flags defaultMode:auto locally (engine doesn't cover it yet)", () => {
+    const f = scanSettings(write("auto.json", { permissions: { defaultMode: "auto" } }));
+    expect(f.some((x) => x.rule === "config-auto-mode" && x.severity === "warning")).toBe(true);
+  });
+
+  it("splits broad allow between engine (unrestricted) and local (specific-risky), no double", () => {
+    const f = scanSettings(
+      write("allow.json", { permissions: { allow: ["Bash(*)", "Bash(curl *)", "WebFetch", "Bash(npm run test *)"] } })
+    );
+    expect(f.some((x) => x.rule === "agent-broad-command-allow")).toBe(true); // Bash(*) — engine
+    const risky = f.filter((x) => x.rule === "config-risky-allow");
+    expect(risky.length).toBe(2); // Bash(curl *) and bare WebFetch; npm run test is fine
+    expect(f.some((x) => x.rule === "config-broad-allow")).toBe(false); // old rule retired
   });
 
   it("flags additionalDirectories that reach home or root", () => {
