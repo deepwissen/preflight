@@ -12,16 +12,8 @@ const SKIP_DIRS = new Set([
   ".preflight-trash",
 ]);
 
-/**
- * Walk a project tree and return the skill/command/agent files the agent carries —
- * SKILL.md anywhere (incl. plugin-bundled / npx-installed) and
- * .claude/{skills,commands,agents}/**.md. Returns paths relative to `root`.
- *
- * Classification is delegated to the engine's isSkillScopeFile so discovery and
- * scope extraction never disagree about what counts as a skill.
- */
-export function findSkillFiles(root: string, extraSkip: Iterable<string> = []): string[] {
-  const skip = new Set([...SKIP_DIRS, ...extraSkip]);
+/** Walk a project tree and return the paths (relative to `root`) that `keep` accepts. */
+function walkFiles(root: string, skip: Set<string>, keep: (rel: string) => boolean): string[] {
   const out: string[] = [];
   const walk = (dir: string): void => {
     let entries: string[];
@@ -42,12 +34,41 @@ export function findSkillFiles(root: string, extraSkip: Iterable<string> = []): 
         if (!skip.has(name)) walk(abs);
       } else {
         const rel = relative(root, abs);
-        if (isSkillScopeFile(rel)) out.push(rel);
+        if (keep(rel)) out.push(rel);
       }
     }
   };
   walk(root);
   return out.sort();
+}
+
+/**
+ * Walk a project tree and return the skill/command/agent files the agent carries —
+ * SKILL.md anywhere (incl. plugin-bundled / npx-installed) and
+ * .claude/{skills,commands,agents}/**.md. Returns paths relative to `root`.
+ *
+ * Classification is delegated to the engine's isSkillScopeFile so discovery and
+ * scope extraction never disagree about what counts as a skill.
+ */
+export function findSkillFiles(root: string, extraSkip: Iterable<string> = []): string[] {
+  return walkFiles(root, new Set([...SKIP_DIRS, ...extraSkip]), isSkillScopeFile);
+}
+
+// Always-on instruction/context files the agent reads every session, but which
+// grant no tools: a CLAUDE.md (memory) or a .claude/rules/*.md (path-scoped rule).
+const CONTEXT_PATH = /(^|\/)CLAUDE\.md$/i;
+const RULE_PATH = /(^|\/)\.claude\/rules\/.*\.md$/i;
+
+/** Classify an always-on context file: "rule", "context" (CLAUDE.md), or null. */
+export function contextKind(path: string): "rule" | "context" | null {
+  if (RULE_PATH.test(path)) return "rule";
+  if (CONTEXT_PATH.test(path)) return "context";
+  return null;
+}
+
+/** Walk a project tree for always-on context files (CLAUDE.md, .claude/rules/*.md). */
+export function findContextFiles(root: string, extraSkip: Iterable<string> = []): string[] {
+  return walkFiles(root, new Set([...SKIP_DIRS, ...extraSkip]), (rel) => contextKind(rel) !== null);
 }
 
 export interface Resolved {

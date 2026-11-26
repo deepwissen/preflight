@@ -65,7 +65,7 @@ function scopesFromFlags(
   return [projectScope(projectRoot)];
 }
 
-const VERSION = "0.3.3"; // keep in sync with package.json
+const VERSION = "0.3.4"; // keep in sync with package.json
 
 /** Read one line from stdin (interactive skill selection). */
 function promptLine(question: string): Promise<string> {
@@ -247,6 +247,7 @@ function runCheck(argv: string[], out: (s: string) => void, err: (s: string) => 
   const report: ManifestReport = {
     root: ".",
     rows: [row],
+    contextFiles: [],
     alwaysTotal: row.alwaysTokens,
     onDemandTotal: row.onDemandTokens,
     settingsRisks: [],
@@ -392,6 +393,7 @@ async function runAdd(
     const report: ManifestReport = {
       root: src,
       rows: selected.map((s) => s.row),
+      contextFiles: [],
       alwaysTotal: selected.reduce((n, s) => n + s.row.alwaysTokens, 0),
       onDemandTotal: selected.reduce((n, s) => n + s.row.onDemandTokens, 0),
       settingsRisks: [],

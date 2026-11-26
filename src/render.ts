@@ -49,18 +49,40 @@ export function summaryLine(report: ManifestReport): string {
   const cfgErr = report.settingsRisks.filter((h) => h.severity === "error").length;
   const cfgWarn = report.settingsRisks.filter((h) => h.severity === "warning").length;
   const cfgIssues = cfgErr + cfgWarn;
-  if (rows.length === 0 && cfgIssues === 0) return "✓ no skills";
+  const ctxErr = report.contextFiles.reduce((n, c) => n + c.errorCount, 0);
+  const ctxIssues = report.contextFiles.reduce((n, c) => n + c.errorCount + c.warnCount, 0);
+  if (rows.length === 0 && cfgIssues === 0 && ctxIssues === 0) return "✓ no skills";
   const need = rows.filter((r) => flatFindings(r).length > 0).length;
   const conflicts = detectCollisions(rows).length + detectAmbiguities(rows).length;
-  const anyErr = rows.some((r) => r.errorCount > 0) || cfgErr > 0;
-  const mark = anyErr ? "✗" : need || conflicts || cfgIssues ? "⚠" : "✓";
+  const anyErr = rows.some((r) => r.errorCount > 0) || cfgErr > 0 || ctxErr > 0;
+  const mark = anyErr ? "✗" : need || conflicts || cfgIssues || ctxIssues ? "⚠" : "✓";
   const parts: string[] = [`${rows.length} skill${rows.length === 1 ? "" : "s"}`];
   if (need) parts.push(`${need} need${need === 1 ? "s" : ""} attention`);
-  else if (!conflicts && !cfgIssues) parts.push("all clean");
+  else if (!conflicts && !cfgIssues && !ctxIssues) parts.push("all clean");
   if (conflicts) parts.push(`${conflicts} conflict${conflicts === 1 ? "" : "s"}`);
   if (cfgIssues) parts.push(`${cfgIssues} config issue${cfgIssues === 1 ? "" : "s"}`);
+  if (ctxIssues) parts.push(`${ctxIssues} context issue${ctxIssues === 1 ? "" : "s"}`);
   parts.push(`~${tok(report.alwaysTotal)}t/prompt`);
   return `${mark} ${parts.join(" · ")}`;
+}
+
+/** The "ALWAYS-ON CONTEXT" block — CLAUDE.md + .claude/rules/*.md the agent reads
+ *  every session. Shows each file's token cost (the visibility) and any injection
+ *  findings. Clean files are listed too — the cost itself is the point. */
+function contextSection(report: ManifestReport): string[] {
+  if (report.contextFiles.length === 0) return [];
+  const flagged = report.contextFiles.filter((c) => c.errorCount || c.warnCount).length;
+  const total = report.contextFiles.reduce((n, c) => n + c.alwaysTokens, 0);
+  const L: string[] = [
+    "",
+    `ALWAYS-ON CONTEXT — files your agent reads every session  (~${tok(total)}t${flagged ? `, ${flagged} flagged` : ""})`,
+  ];
+  for (const c of report.contextFiles) {
+    const worst = c.errorCount ? "✗" : c.warnCount ? "⚠" : c.findings.length ? "ℹ" : "·";
+    L.push("", `  ${worst} ${c.path}   ~${tok(c.alwaysTokens)}t  (${c.kind})`);
+    for (const f of c.findings) L.push(`     • [${f.severity}] ${f.message}${f.line ? ` (line ${f.line})` : ""}`);
+  }
+  return L;
 }
 
 /** The "CONFIG & HOOKS" block — settings.json things your agent loads automatically
@@ -87,12 +109,14 @@ function configSection(report: ManifestReport): string[] {
 /** Render the agent-skill manifest as the human "loadout" screen. */
 export function renderManifest(report: ManifestReport): string {
   const { rows } = report;
-  if (rows.length === 0 && report.settingsRisks.length === 0) {
+  if (rows.length === 0 && report.settingsRisks.length === 0 && report.contextFiles.length === 0) {
     return `Preflight · manifest\n${report.root}\n\nNo agent skills found (.claude/skills, commands, agents, or SKILL.md).`;
   }
   if (rows.length === 0) {
-    // No skills, but settings risks are present — still worth surfacing.
-    return [`preflight · ${summaryLine(report)}`, report.root, ...configSection(report), ""].join("\n");
+    // No skills, but context/settings risks are present — still worth surfacing.
+    return [`preflight · ${summaryLine(report)}`, report.root, ...contextSection(report), ...configSection(report), ""].join(
+      "\n"
+    );
   }
 
   const nameW = Math.max(6, ...rows.map((r) => (r.name ?? r.path).length));
@@ -175,6 +199,7 @@ export function renderManifest(report: ManifestReport): string {
     }
   }
 
+  L.push(...contextSection(report));
   L.push(...configSection(report));
 
   L.push("");

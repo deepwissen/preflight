@@ -90,6 +90,28 @@ export function scanSkill(path: string, content: string): Finding[] {
   return out;
 }
 
+/**
+ * Scan an always-on instruction/context file — CLAUDE.md or a .claude/rules/*.md —
+ * for the risks that matter there: embedded secrets and instruction-integrity
+ * (prompt injection, hidden unicode, role-tag spoofing). No tool-scope check: these
+ * files carry instructions, not tool grants. This is the surface the "rules-file
+ * backdoor" hides in — a repo's CLAUDE.md or rule steering the agent on every turn.
+ */
+export function scanInstruction(path: string, content: string): Finding[] {
+  const snap = emptySnapshot();
+  snap.activeFile = fileInfo(path, content);
+  snap.aiInstructionFiles = [{ path, lineCount: content.split("\n").length, toolId: null, content }];
+
+  const out: Finding[] = [];
+  for (const f of scanSecrets(snap, {}).secretFindings ?? []) {
+    out.push({ severity: f.severity, rule: f.ruleId, message: f.description, line: f.lineNumber, suggestion: f.suggestion });
+  }
+  for (const i of scanInstructionIntegrity(snap, {}).instructionFileIssues ?? []) {
+    out.push({ severity: i.severity ?? "warning", rule: i.issue, message: i.description, line: i.lineNumber, suggestion: i.suggestion });
+  }
+  return out;
+}
+
 function lineFrom(text: string): number | undefined {
   const m = text.match(/\bline (\d+)\b/);
   return m ? Number(m[1]) : undefined;

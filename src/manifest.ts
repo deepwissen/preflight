@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, relative } from "node:path";
 import { extractSkillScope, type SkillScope } from "@deepwissen/preflight-core";
-import { findSkillFiles } from "./discover.js";
-import { scanSkill, type Finding } from "./scan.js";
+import { findSkillFiles, findContextFiles, contextKind } from "./discover.js";
+import { scanSkill, scanInstruction, type Finding } from "./scan.js";
 import { enumerateBundle, type Bundle } from "./bundle.js";
 import { scanSettings } from "./hooks.js";
 import type { Scope, ScopeName } from "./scopes.js";
@@ -70,12 +70,38 @@ export function flatFindings(row: SkillRow): Array<{ file: string; finding: Find
   return out;
 }
 
+/** An always-on instruction/context file (CLAUDE.md or a .claude/rules/*.md): loaded
+ *  every session, grants no tools, but carries token cost and injection risk. */
+export interface ContextRow {
+  path: string;
+  kind: "rule" | "context";
+  alwaysTokens: number; // whole body loads at session start
+  findings: Finding[];
+  errorCount: number;
+  warnCount: number;
+}
+
 export interface ManifestReport {
   root: string;
   rows: SkillRow[];
+  contextFiles: ContextRow[]; // CLAUDE.md + .claude/rules/*.md — always-on, non-tool context
   alwaysTotal: number;
   onDemandTotal: number;
   settingsRisks: LocatedFinding[]; // config-risk findings from scope settings.json files
+}
+
+/** Build one context-file row: always-on token cost + an instruction-integrity scan. */
+export function buildContextRow(absPath: string, displayPath: string): ContextRow {
+  const content = readFileSync(absPath, "utf8");
+  const findings = scanInstruction(displayPath, content);
+  return {
+    path: displayPath,
+    kind: contextKind(displayPath) === "rule" ? "rule" : "context",
+    alwaysTokens: estTokens(content),
+    findings,
+    errorCount: findings.filter((f) => f.severity === "error").length,
+    warnCount: findings.filter((f) => f.severity === "warning").length,
+  };
 }
 
 /** Build one skill's row: scope + footprint + scan. `displayPath` is what's shown
@@ -129,6 +155,11 @@ export function reportFindings(report: ManifestReport): LocatedFinding[] {
       }
     }
   }
+  for (const c of report.contextFiles) {
+    for (const f of c.findings) {
+      out.push({ file: c.path, rule: f.rule, severity: f.severity, message: f.message, line: f.line });
+    }
+  }
   out.push(...report.settingsRisks);
   return out;
 }
@@ -160,9 +191,11 @@ export function exitForReport(report: ManifestReport, failOn: FailOn): number {
 /** Build the agent-skill manifest for a directory (optionally skipping dirs). */
 export function buildManifest(root: string, skip: Iterable<string> = []): ManifestReport {
   const rows = findSkillFiles(root, skip).map((rel) => buildRow(join(root, rel), rel));
+  const contextFiles = findContextFiles(root, skip).map((rel) => buildContextRow(join(root, rel), rel));
   return {
     root,
     rows,
+    contextFiles,
     alwaysTotal: rows.reduce((n, r) => n + r.alwaysTokens, 0),
     onDemandTotal: rows.reduce((n, r) => n + r.onDemandTokens, 0),
     settingsRisks: [],
@@ -174,16 +207,18 @@ export function buildManifest(root: string, skip: Iterable<string> = []): Manife
 export function buildScopes(scopes: Scope[]): ManifestReport {
   const multi = scopes.length > 1;
   const rows: SkillRow[] = [];
+  const contextFiles: ContextRow[] = [];
   const settingsRisks: LocatedFinding[] = [];
   for (const s of scopes) {
-    for (const row of buildManifest(s.scanRoot, s.skip).rows) {
-      rows.push(multi ? { ...row, origin: s.name } : row);
-    }
+    const sub = buildManifest(s.scanRoot, s.skip);
+    for (const row of sub.rows) rows.push(multi ? { ...row, origin: s.name } : row);
+    contextFiles.push(...sub.contextFiles);
     settingsRisks.push(...scopeSettingsRisks(s));
   }
   return {
     root: multi ? scopes.map((s) => s.name).join(" + ") : scopes[0].scanRoot,
     rows,
+    contextFiles,
     alwaysTotal: rows.reduce((n, r) => n + r.alwaysTokens, 0),
     onDemandTotal: rows.reduce((n, r) => n + r.onDemandTokens, 0),
     settingsRisks,
