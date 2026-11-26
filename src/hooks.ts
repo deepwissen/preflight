@@ -218,154 +218,48 @@ export function scanHooks(pluginDir: string): Finding[] {
   return walkHooks(root as Record<string, unknown>, (cmd) => pluginScript(cmd, pluginDir));
 }
 
-// --- settings.json config-risk checks (beyond hooks) ---
+// --- settings.json checks that remain in the tool ---
+//
+// Canonical config-key detection — apiKeyHelper, env *_BASE_URL redirect, defaultMode,
+// permissions.allow / additionalDirectories, extraKnownMarketplaces — is owned by the
+// ENGINE's agent-config-scanner (agent-* rules), invoked in scanSettings below. Only the
+// two checks the pure/zero-fs engine can't host stay here: the env secret-scan (needs
+// scanCode) and the enabledPlugins transparency line (info — the engine emits only
+// error/warning).
 
-// A bare non-Bash tool grant with no constraint. (Unrestricted Bash — Bash, Bash(*),
-// and bare * — is owned by the engine's agent-broad-command-allow, so it's excluded
-// here to avoid double-reporting.)
-const BARE_TOOL_ALLOW = /^(WebFetch|WebSearch|Write|Edit|NotebookEdit)(\(\s*:?\*?\s*\))?$/;
-// A permissions.allow entry that pre-approves a high-risk shell command (narrower than
-// the engine's unrestricted-shell rule — a specific dangerous command, not Bash(*)).
-const RISKY_BASH_ALLOW =
-  /^Bash\(\s*(?:sudo|rm|curl|wget|eval|exec|chmod|chown|ssh|scp|nc|ncat|bash|sh|zsh|python3?|node|dd|mkfs)\b/i;
-// An additionalDirectories entry that reaches home or root.
-const BROAD_DIR = /^(~|\/|\$HOME|~\/|\/\*{1,2}|\$HOME\/?)$/;
-// Hosts that legitimately terminate Anthropic API traffic.
-const OFFICIAL_ANTHROPIC_HOST = /(?:^|\.)anthropic\.com$|(?:^|\.)claude\.(?:ai|com)$/i;
-
-function hostOf(url: string): string | null {
-  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/\s:]+)/i.exec(url.trim());
-  return m ? m[1] : null;
-}
-
-function scanApiKeyHelper(v: unknown): Finding[] {
-  if (typeof v !== "string" || !v.trim()) return [];
-  return [
-    {
-      severity: "error",
-      rule: "config-apikeyhelper",
-      message: `apiKeyHelper runs a shell command to obtain credentials: ${truncate(v)}`,
-      suggestion: "this command runs automatically to fetch an API key — vet it or remove it if you didn't add it",
-    },
-    ...dangerousFindings(v, "apiKeyHelper command"),
-  ];
-}
-
-function scanEnv(env: unknown): Finding[] {
+/** Hardcoded secrets/tokens in the env block — not covered by the engine's config scan. */
+function scanEnvSecrets(env: unknown): Finding[] {
   if (!env || typeof env !== "object") return [];
-  const e = env as Record<string, unknown>;
-  const out: Finding[] = [];
-  for (const [k, v] of Object.entries(e)) {
-    if (typeof v !== "string") continue;
-    if (/_BASE_URL$|_API_URL$/i.test(k)) {
-      const host = hostOf(v);
-      if (host && !OFFICIAL_ANTHROPIC_HOST.test(host)) {
-        out.push({
-          severity: "error",
-          rule: "config-env-base-url",
-          message: `env.${k} redirects API traffic to ${host}`,
-          suggestion: "a non-Anthropic base URL can route your prompts and API keys through a third party — confirm you set this",
-        });
-      }
-    }
-  }
-  // Run the env block through the secret scanner — catches hardcoded keys/tokens.
-  const envText = Object.entries(e)
+  const envText = Object.entries(env as Record<string, unknown>)
     .filter(([, v]) => typeof v === "string")
     .map(([k, v]) => `${k}=${v}`)
     .join("\n");
-  if (envText) {
-    for (const f of scanCode("settings.env", envText, "shellscript")) {
-      out.push({ ...f, message: `env block: ${f.message}` });
-    }
-  }
-  return out;
+  if (!envText) return [];
+  return scanCode("settings.env", envText, "shellscript").map((f) => ({ ...f, message: `env block: ${f.message}` }));
 }
 
-function scanPermissions(perms: unknown): Finding[] {
-  if (!perms || typeof perms !== "object") return [];
-  const p = perms as Record<string, unknown>;
-  const out: Finding[] = [];
-
-  // Note: bypassPermissions is owned by the engine (agent-skip-permissions). Only the
-  // auto classifier mode — which the engine doesn't yet flag — is checked here.
-  if (p.defaultMode === "auto") {
-    out.push({
-      severity: "warning",
-      rule: "config-auto-mode",
-      message: `permissions.defaultMode is "auto" — a classifier auto-approves actions instead of you`,
-      suggestion: "a repo that sets this weakens the approval gate — prefer leaving defaultMode unset",
-    });
-  }
-
-  if (Array.isArray(p.allow)) {
-    for (const entry of p.allow) {
-      if (typeof entry !== "string") continue;
-      const e = entry.trim();
-      if (BARE_TOOL_ALLOW.test(e)) {
-        out.push({
-          severity: "warning",
-          rule: "config-risky-allow",
-          message: `permissions.allow pre-approves a broad capability: "${e}"`,
-          suggestion: "this auto-approves the tool with no constraint once the repo is trusted — narrow it or remove it",
-        });
-      } else if (RISKY_BASH_ALLOW.test(e)) {
-        out.push({
-          severity: "warning",
-          rule: "config-risky-allow",
-          message: `permissions.allow pre-approves a dangerous command: "${truncate(e)}"`,
-          suggestion: "this auto-approves a high-risk command once the repo is trusted — review it",
-        });
-      }
-    }
-  }
-
-  if (Array.isArray(p.additionalDirectories)) {
-    for (const d of p.additionalDirectories) {
-      if (typeof d === "string" && BROAD_DIR.test(d.trim())) {
-        out.push({
-          severity: "warning",
-          rule: "config-broad-dir",
-          message: `permissions.additionalDirectories grants broad file access: "${d}"`,
-          suggestion: "this widens what the agent can read and write beyond the project — scope it down",
-        });
-      }
-    }
-  }
-  return out;
-}
-
-function scanSupplyChain(s: Record<string, unknown>): Finding[] {
-  const out: Finding[] = [];
-  const mkts = s.extraKnownMarketplaces;
-  const mktNames = mkts && typeof mkts === "object" ? Object.keys(mkts as object) : [];
-  if (mktNames.length) {
-    out.push({
-      severity: "warning",
-      rule: "config-extra-marketplace",
-      message: `adds plugin marketplace(s): ${mktNames.join(", ")}`,
-      suggestion: "plugins from an added marketplace run with your agent — scan them (`preflight plugins`) before trusting",
-    });
-  }
+/** Transparency: which plugins auto-load (info — below the engine's error/warning floor). */
+function scanEnabledPlugins(s: Record<string, unknown>): Finding[] {
   const plugins = s.enabledPlugins;
   const plist = Array.isArray(plugins)
     ? plugins
     : plugins && typeof plugins === "object"
       ? Object.keys(plugins as object)
       : [];
-  if (plist.length) {
-    out.push({
+  if (!plist.length) return [];
+  return [
+    {
       severity: "info",
       rule: "config-enabled-plugins",
       message: `auto-enables plugin(s): ${plist.slice(0, 8).join(", ")}${plist.length > 8 ? "…" : ""}`,
       suggestion: "these plugins load automatically — run `preflight plugins` to audit them",
-    });
-  }
-  return out;
+    },
+  ];
 }
 
-/** Config-risk analysis for a settings.json (project or user): hooks, apiKeyHelper,
- *  env, permissions, and plugin-marketplace keys. Read-only; the file is never changed. */
+/** Config-risk analysis for a settings.json (project or user). Canonical config-key
+ *  risk comes from the engine's agent-config scanner; this adds the deep hook analysis,
+ *  env secret-scan, and enabledPlugins transparency. Read-only; the file is never changed. */
 export function scanSettings(settingsPath: string): Finding[] {
   if (!existsSync(settingsPath)) return [];
 
@@ -398,9 +292,7 @@ export function scanSettings(settingsPath: string): Finding[] {
     const projectDir = basename(base) === ".claude" ? dirname(base) : undefined;
     findings.push(...walkHooks(s.hooks as Record<string, unknown>, (cmd) => settingsScript(cmd, base, projectDir)));
   }
-  findings.push(...scanApiKeyHelper(s.apiKeyHelper));
-  findings.push(...scanEnv(s.env));
-  findings.push(...scanPermissions(s.permissions));
-  findings.push(...scanSupplyChain(s));
+  findings.push(...scanEnvSecrets(s.env));
+  findings.push(...scanEnabledPlugins(s));
   return findings;
 }
