@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, relative, resolve } from "node:path";
 import { extractSkillScope, type SkillScope } from "@deepwissen/preflight-core";
@@ -219,6 +219,46 @@ function scopeSettingsRisks(scope: Scope): LocatedFinding[] {
       } catch {
         /* unreadable — skip */
       }
+    }
+  }
+  // MCP servers in ~/.claude.json — where `claude mcp add` writes by default, and the
+  // surface preflight most easily misses. Top-level mcpServers are global (user scope);
+  // projects[<cwd>].mcpServers are scoped to one project (project scope). Either can wire
+  // the agent to a server that runs curl|sh.
+  const claudeJson = join(home, ".claude.json");
+  if (existsSync(claudeJson)) {
+    try {
+      const j = JSON.parse(readFileSync(claudeJson, "utf8")) as {
+        mcpServers?: unknown;
+        projects?: Record<string, { mcpServers?: unknown } | undefined>;
+      };
+      let servers = scope.name === "user" ? j.mcpServers : undefined;
+      if (scope.name === "project" && j.projects && typeof j.projects === "object") {
+        // Match the project key by realpath — the stored key may differ from cwd by a
+        // symlink (/tmp vs /private/tmp) or trailing slash.
+        const real = (p: string): string => {
+          try {
+            return realpathSync(p);
+          } catch {
+            return p.replace(/\/+$/, "");
+          }
+        };
+        const target = real(scope.scanRoot);
+        for (const [key, val] of Object.entries(j.projects)) {
+          if (key === scope.scanRoot || real(key) === target) {
+            servers = val?.mcpServers;
+            break;
+          }
+        }
+      }
+      const label = scope.name === "user" ? "~/.claude.json" : "~/.claude.json (local)";
+      if (servers && typeof servers === "object") {
+        for (const f of scanMcpConfig(label, JSON.stringify({ mcpServers: servers }))) {
+          out.push({ file: label, rule: f.rule, severity: f.severity, message: f.message, line: f.line });
+        }
+      }
+    } catch {
+      /* corrupt ~/.claude.json — skip here */
     }
   }
   return out;
