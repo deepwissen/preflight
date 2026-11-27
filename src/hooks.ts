@@ -1,6 +1,10 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, basename, isAbsolute } from "node:path";
 import { scanCode, scanAgentConfigFile, type Finding } from "./scan.js";
+import { scanDangerous } from "./danger.js";
+
+/** Dangerous-command scan for hook command/script text (keeps hook-* rule ids). */
+const dangerousFindings = (text: string, where: string): Finding[] => scanDangerous(text, where, "hook");
 
 /**
  * Config-risk analysis for Claude Code settings. Two surfaces:
@@ -16,53 +20,6 @@ import { scanCode, scanAgentConfigFile, type Finding } from "./scan.js";
  * bundled script it invokes, the args array, an http endpoint, or the config keys.
  */
 
-const DANGEROUS: Array<{ re: RegExp; rule: string; severity: Finding["severity"]; what: string }> = [
-  {
-    re: /\b(?:curl|wget|fetch)\b[^|&;]*\|\s*(?:sh|bash|zsh|python3?|node|deno)\b/i,
-    rule: "hook-fetch-execute",
-    severity: "error",
-    what: "fetches a remote script and pipes it to a shell (remote code execution)",
-  },
-  {
-    re: /\beval\b[^;]*\$\((?:curl|wget)\b/i,
-    rule: "hook-fetch-execute",
-    severity: "error",
-    what: "evals the output of a remote fetch (remote code execution)",
-  },
-  {
-    re: /\bbase64\s+(?:-d|--decode|-D)\b[^|]*\|\s*(?:sh|bash|zsh|python3?|node)\b/i,
-    rule: "hook-obfuscated-exec",
-    severity: "error",
-    what: "decodes base64 and pipes it to a shell (obfuscated execution)",
-  },
-  {
-    re: /(?:~\/\.ssh\/|\bid_rsa\b|\bid_ed25519\b|~\/\.aws\/credentials|\.pem\b)/i,
-    rule: "hook-credential-access",
-    severity: "warning",
-    what: "touches credential files (SSH / AWS keys)",
-  },
-  {
-    re: /\brm\s+-[rf]{1,2}\s+(?:\/(?!tmp\b)|~\/|\$HOME\b)/i,
-    rule: "hook-destructive",
-    severity: "error",
-    what: "runs a destructive rm -rf on a home/root path",
-  },
-];
-
-function dangerousFindings(text: string, where: string): Finding[] {
-  const out: Finding[] = [];
-  for (const d of DANGEROUS) {
-    if (d.re.test(text)) {
-      out.push({
-        severity: d.severity,
-        rule: d.rule,
-        message: `${where}: ${d.what}`,
-        suggestion: "this runs automatically on the event — remove the dangerous command or vet the remote source",
-      });
-    }
-  }
-  return out;
-}
 
 const EXT_LANG: Record<string, string> = {
   sh: "shellscript", bash: "shellscript", zsh: "shellscript", py: "python",

@@ -1,6 +1,7 @@
 import { readdirSync, statSync, readFileSync } from "node:fs";
 import { join, dirname, relative, extname } from "node:path";
-import { scanCode, scanMcpConfig, looksMcpConfig, type Finding } from "./scan.js";
+import { scanCode, scanInstruction, scanMcpConfig, looksMcpConfig, type Finding } from "./scan.js";
+import { scanDangerous } from "./danger.js";
 
 // Executable/script file types a skill may ship alongside its SKILL.md. The agent
 // can be told to run these, so they're code the skill carries — worth scanning.
@@ -74,14 +75,17 @@ export function enumerateBundle(skillAbsPath: string): Bundle {
       const lang = SCRIPT_LANG[ext];
       const rel = relative(root, abs);
 
-      // 1. A bundled script — scan as code (secrets + traps).
+      // 1. A bundled script — the agent can be told to run it. Scan as code
+      //    (secrets + traps) AND for dangerous commands (curl|sh, reverse shells,
+      //    credential exfil, destructive rm).
       if (lang) {
-        scripts.push({
-          path: rel,
-          language: lang,
-          bytes: s.size,
-          findings: s.size > MAX_BYTES ? [] : scanCode(rel, readFileSync(abs, "utf8"), lang),
-        });
+        let findings: Finding[] = [];
+        if (s.size <= MAX_BYTES) {
+          const content = readFileSync(abs, "utf8");
+          // `where` is empty — flatFindings/the renderer already prefix the file path.
+          findings = [...scanCode(rel, content, lang), ...scanDangerous(content, "", "script")];
+        }
+        scripts.push({ path: rel, language: lang, bytes: s.size, findings });
         continue;
       }
 
@@ -100,7 +104,20 @@ export function enumerateBundle(skillAbsPath: string): Bundle {
         }
       }
 
-      // 3. Everything else — ships with the skill but isn't code we scan.
+      // 3. A bundled .md the skill references (reference.md, etc.) — the agent may
+      //    be told to read and follow it, so it's an instruction surface: scan for
+      //    prompt-injection / hidden-unicode just like the SKILL.md prose.
+      if (ext === ".md" && s.size <= MAX_BYTES) {
+        scripts.push({
+          path: rel,
+          language: "markdown",
+          bytes: s.size,
+          findings: scanInstruction(rel, readFileSync(abs, "utf8")),
+        });
+        continue;
+      }
+
+      // 4. Everything else — ships with the skill but isn't code/prose we scan.
       otherFiles++;
     }
   };
