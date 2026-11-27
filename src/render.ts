@@ -7,6 +7,12 @@ function hmark(s: HealthStatus): string {
   return s === "ok" ? "✓" : s === "warn" ? "⚠" : "✗";
 }
 
+/** Strip a trailing "in <file> line N" / "line N" the engine embeds in some messages,
+ *  since the renderer shows the file + line separately (avoids "… line 1 (line 1)"). */
+function cleanMsg(message: string): string {
+  return message.replace(/\s+in\s+\S+\s+line\s+\d+\s*$/i, "").replace(/\s+line\s+\d+\s*$/i, "");
+}
+
 /** A numbered, choose-by-number list of skills found in a source — each with its
  *  risk and per-prompt cost, so the user picks informed (e.g. "1,4,6"). */
 export function renderPickList(items: InstallItem[], label: string): string {
@@ -80,7 +86,7 @@ function contextSection(report: ManifestReport): string[] {
   for (const c of report.contextFiles) {
     const worst = c.errorCount ? "✗" : c.warnCount ? "⚠" : c.findings.length ? "ℹ" : "·";
     L.push("", `  ${worst} ${c.path}   ~${tok(c.alwaysTokens)}t  (${c.kind})`);
-    for (const f of c.findings) L.push(`     • [${f.severity}] ${f.message}${f.line ? ` (line ${f.line})` : ""}`);
+    for (const f of c.findings) L.push(`     • [${f.severity}] ${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`);
   }
   return L;
 }
@@ -101,7 +107,7 @@ function configSection(report: ManifestReport): string[] {
   for (const [file, fs] of byFile) {
     const worst = fs.some((f) => f.severity === "error") ? "✗" : fs.some((f) => f.severity === "warning") ? "⚠" : "ℹ";
     L.push("", `  ${worst} ${file}`);
-    for (const f of fs) L.push(`     • [${f.severity}] ${f.message}${f.line ? ` (line ${f.line})` : ""}`);
+    for (const f of fs) L.push(`     • [${f.severity}] ${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`);
   }
   return L;
 }
@@ -160,7 +166,7 @@ export function renderManifest(report: ManifestReport): string {
       L.push(`  ${r.errorCount ? "✗" : "⚠"} ${r.name ?? r.path}      ${r.path}`);
       for (const { file, finding: f } of flatFindings(r)) {
         const where = file !== r.path ? `${file}: ` : "";
-        L.push(`     • [${f.severity}] ${where}${f.message}${f.line ? ` (line ${f.line})` : ""}`);
+        L.push(`     • [${f.severity}] ${where}${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`);
       }
       L.push(`     → preflight check ${r.name ?? r.path}`);
     }
@@ -254,7 +260,7 @@ export function renderPlugins(plugins: import("./plugins.js").PluginInfo[]): str
       L.push(`  ${p.errorCount ? "✗" : "⚠"} ${p.name}  (${p.source} · ${p.scopes.join("+") || "user"})${where}`);
       // show the real findings, not the info-level "runs hooks on …" transparency line
       for (const { file, finding: f } of p.findings.filter((x) => x.finding.severity !== "info")) {
-        L.push(`     • [${f.severity}] ${file}: ${f.message}${f.line ? ` (line ${f.line})` : ""}`);
+        L.push(`     • [${f.severity}] ${file}: ${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`);
       }
     }
   }
@@ -331,6 +337,7 @@ export function renderCheck(row: SkillRow): string {
     L.push("");
     const other = b.otherFiles ? `, ${b.otherFiles} other file${b.otherFiles > 1 ? "s" : ""}` : "";
     L.push(`BUNDLED FILES (${b.scripts.length} scanned${other})`);
+    const pathW = Math.max(20, ...b.scripts.map((sc) => sc.path.length)) + 2; // grow to fit long paths
     for (const sc of b.scripts) {
       const errs = sc.findings.filter((f) => f.severity === "error").length;
       const st = errs
@@ -338,7 +345,7 @@ export function renderCheck(row: SkillRow): string {
         : sc.findings.length
           ? `⚠ ${sc.findings.length} issue${sc.findings.length > 1 ? "s" : ""}`
           : "✓ clean";
-      L.push(`  ${pad(sc.path, 30)}${pad(bytes(sc.bytes), 9)} ${st}`);
+      L.push(`  ${pad(sc.path, pathW)}${pad(bytes(sc.bytes), 9)}  ${st}`);
     }
   }
 
@@ -355,7 +362,7 @@ export function renderCheck(row: SkillRow): string {
       const where = file !== row.path ? ` in ${file}` : "";
       L.push("");
       L.push(`  ${mark} [${f.severity}] ${f.rule}${f.line ? `  (line ${f.line})` : ""}${where}`);
-      L.push(`    ${f.message}`);
+      L.push(`    ${cleanMsg(f.message)}`);
       if (f.suggestion) L.push(`    → ${f.suggestion}`);
     }
   }

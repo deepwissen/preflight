@@ -42,16 +42,28 @@ function walkFiles(root: string, skip: Set<string>, keep: (rel: string) => boole
   return out.sort();
 }
 
+const SKILL_MD = /(^|\/)skill\.md$/i;
+const COMMAND_OR_AGENT = /(^|\/)\.claude\/(commands|agents)\/.*\.md$/i;
+
 /**
- * Walk a project tree and return the skill/command/agent files the agent carries —
+ * Is this file itself a skill/command/agent ROW — a thing the agent loads as a unit?
+ * SKILL.md (a skill owns a directory) and single-file .claude/commands|agents/*.md.
+ * A helper .md nested under .claude/skills/<name>/ (reference.md, etc.) is NOT a row —
+ * it's scanned via the owning skill's bundle (enumerateBundle), so it isn't double-listed
+ * and `check <name>` isn't made ambiguous by it. (The engine's isSkillScopeFile matches
+ * any .md under .claude/skills for scope extraction; this is the stricter row filter.)
+ */
+export function isSkillRow(rel: string): boolean {
+  return SKILL_MD.test(rel) || COMMAND_OR_AGENT.test(rel);
+}
+
+/**
+ * Walk a project tree and return the skill/command/agent ROWS the agent carries —
  * SKILL.md anywhere (incl. plugin-bundled / npx-installed) and
- * .claude/{skills,commands,agents}/**.md. Returns paths relative to `root`.
- *
- * Classification is delegated to the engine's isSkillScopeFile so discovery and
- * scope extraction never disagree about what counts as a skill.
+ * .claude/{commands,agents}/**.md. Returns paths relative to `root`.
  */
 export function findSkillFiles(root: string, extraSkip: Iterable<string> = []): string[] {
-  return walkFiles(root, new Set([...SKIP_DIRS, ...extraSkip]), isSkillScopeFile);
+  return walkFiles(root, new Set([...SKIP_DIRS, ...extraSkip]), isSkillRow);
 }
 
 // Always-on instruction/context files the agent reads every session, but which

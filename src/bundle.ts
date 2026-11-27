@@ -1,5 +1,5 @@
-import { readdirSync, statSync, readFileSync } from "node:fs";
-import { join, dirname, relative, extname } from "node:path";
+import { readdirSync, lstatSync, readlinkSync, readFileSync } from "node:fs";
+import { join, dirname, relative, extname, resolve, sep } from "node:path";
 import { scanCode, scanInstruction, scanMcpConfig, looksMcpConfig, type Finding } from "./scan.js";
 import { scanDangerous } from "./danger.js";
 
@@ -61,8 +61,36 @@ export function enumerateBundle(skillAbsPath: string): Bundle {
       const abs = join(dir, name);
       let s;
       try {
-        s = statSync(abs);
+        s = lstatSync(abs); // lstat: detect symlinks instead of following them
       } catch {
+        continue;
+      }
+      // A bundled symlink — a skill shouldn't ship one. If it escapes the skill dir it's
+      // a read primitive (e.g. notes.md → ~/.aws/credentials). Flag; never follow it.
+      if (s.isSymbolicLink()) {
+        count++;
+        const rel = relative(root, abs);
+        let target = "";
+        try {
+          target = readlinkSync(abs);
+        } catch {
+          /* unreadable link */
+        }
+        const resolved = resolve(dir, target);
+        const escapes = resolved !== root && !resolved.startsWith(root + sep);
+        scripts.push({
+          path: rel,
+          language: "symlink",
+          bytes: 0,
+          findings: [
+            {
+              severity: "error",
+              rule: "bundle-symlink",
+              message: `symlink → ${target || "?"}${escapes ? " — points outside the skill (possible credential/file exfiltration)" : ""}`,
+              suggestion: "a skill shouldn't ship symlinks — don't install it, or remove the link",
+            },
+          ],
+        });
         continue;
       }
       if (s.isDirectory()) {

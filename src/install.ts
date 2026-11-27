@@ -111,24 +111,40 @@ export function parseSelection(
   return { indices: [...picked].sort((a, b) => a - b) };
 }
 
-/** Select planned items by skill name (--only), matching dir name or declared name. */
+/** Install names that collide (same install folder) — the later would shadow the earlier.
+ *  Returns each colliding name once. */
+export function nameCollisions(items: InstallItem[]): string[] {
+  const counts = new Map<string, number>();
+  for (const it of items) counts.set(it.name.toLowerCase(), (counts.get(it.name.toLowerCase()) ?? 0) + 1);
+  return [...counts.entries()].filter(([, n]) => n > 1).map(([name]) => name);
+}
+
+/** Select planned items by skill name (--only), matching dir name or declared name.
+ *  `ambiguous` names match more than one skill (picking one would silently shadow). */
 export function selectByNames(
   items: InstallItem[],
   names: string[]
-): { selected: InstallItem[]; notFound: string[] } {
-  const byName = new Map<string, InstallItem>();
+): { selected: InstallItem[]; notFound: string[]; ambiguous: string[] } {
+  const byName = new Map<string, InstallItem[]>();
+  const add = (k: string, it: InstallItem): void => {
+    const list = byName.get(k) ?? [];
+    if (!list.includes(it)) list.push(it);
+    byName.set(k, list);
+  };
   for (const it of items) {
-    byName.set(it.name.toLowerCase(), it);
-    if (it.row.name) byName.set(it.row.name.toLowerCase(), it);
+    add(it.name.toLowerCase(), it);
+    if (it.row.name) add(it.row.name.toLowerCase(), it);
   }
   const selected: InstallItem[] = [];
   const notFound: string[] = [];
+  const ambiguous: string[] = [];
   for (const raw of names) {
-    const it = byName.get(raw.trim().toLowerCase());
-    if (it && !selected.includes(it)) selected.push(it);
-    else if (!it) notFound.push(raw.trim());
+    const matches = byName.get(raw.trim().toLowerCase());
+    if (!matches || matches.length === 0) notFound.push(raw.trim());
+    else if (matches.length > 1) ambiguous.push(raw.trim());
+    else if (!selected.includes(matches[0])) selected.push(matches[0]);
   }
-  return { selected, notFound };
+  return { selected, notFound, ambiguous };
 }
 
 /** Copy one planned skill into .claude/skills (overwriting only when asked). */

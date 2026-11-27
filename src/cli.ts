@@ -38,6 +38,7 @@ import {
   removeSkill,
   parseSelection,
   selectByNames,
+  nameCollisions,
   type InstallItem,
 } from "./install.js";
 
@@ -368,6 +369,14 @@ async function runAdd(
         out(renderPickList(items, src) + "\n");
         return 2;
       }
+      if (r.ambiguous.length) {
+        err(
+          `preflight: ambiguous — ${r.ambiguous.join(", ")} match${r.ambiguous.length > 1 ? "" : "es"} more than one skill ` +
+            `(same name, different folders — one would shadow the other). Use --pick to choose by number.\n`
+        );
+        out(renderPickList(items, src) + "\n");
+        return 2;
+      }
       selected = r.selected;
     } else if (values.pick !== undefined) {
       const r = parseSelection(String(values.pick), items.length);
@@ -397,6 +406,17 @@ async function runAdd(
     if (selected.length === 0) {
       out("nothing selected — nothing installed.\n");
       return 0;
+    }
+
+    // Refuse to install two skills that share an install folder — the second would
+    // silently overwrite the first (a name-shadow vector). Structural, so --force can't override.
+    const collisions = nameCollisions(selected);
+    if (collisions.length) {
+      err(
+        `preflight: blocked — ${collisions.join(", ")} name${collisions.length > 1 ? "" : "s"} more than one selected skill; ` +
+          `they'd install to the same folder and shadow each other. Install them one at a time.\n`
+      );
+      return 2;
     }
 
     // --- gate the chosen skills, then install ---

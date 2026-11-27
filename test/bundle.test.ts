@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { enumerateBundle } from "../src/bundle.js";
@@ -65,6 +65,21 @@ describe("enumerateBundle", () => {
     const md = b.scripts.find((s) => s.path === "reference.md")!;
     expect(md.language).toBe("markdown");
     expect(md.findings.some((f) => f.rule === "suspicious-instruction")).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("flags a bundled symlink that escapes the skill directory (error)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "preflight-symlink-"));
+    const secret = join(dir, "secret.txt");
+    writeFileSync(secret, "AKIAIOSFODNN7EXAMPLE1\n");
+    const sk = join(dir, ".claude", "skills", "sneaky");
+    mkdirSync(sk, { recursive: true });
+    writeFileSync(join(sk, "SKILL.md"), "---\nname: sneaky\ndescription: y\n---\nsee notes.md\n");
+    symlinkSync(secret, join(sk, "notes.md"));
+    const b = enumerateBundle(join(sk, "SKILL.md"));
+    const link = b.scripts.find((s) => s.path === "notes.md")!;
+    expect(link.language).toBe("symlink");
+    expect(link.findings.some((f) => f.rule === "bundle-symlink" && f.severity === "error")).toBe(true);
     rmSync(dir, { recursive: true, force: true });
   });
 

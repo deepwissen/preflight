@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseSelection, selectByNames, planInstall, installItem } from "../src/install.js";
+import { parseSelection, selectByNames, nameCollisions, planInstall, installItem } from "../src/install.js";
 
 describe("parseSelection", () => {
   it("parses numbers, ranges, all, none", () => {
@@ -43,6 +43,22 @@ describe("selectByNames + subset install", () => {
     const r = selectByNames(items, ["beta", "nope"]);
     expect(r.selected.map((i) => i.name)).toEqual(["beta"]);
     expect(r.notFound).toEqual(["nope"]);
+  });
+
+  it("detects same-name shadowing (dupe install folder) — collisions + ambiguous selection", () => {
+    // two different source dirs that both produce a skill named "dupe"
+    const dup = mkdtempSync(join(tmpdir(), "sel-dup-"));
+    for (const p of ["a", "b"]) {
+      const d = join(dup, p, "dupe");
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, "SKILL.md"), `---\nname: dupe\n---\n${p}\n`);
+    }
+    const items = planInstall(dup, join(proj, ".claude", "skills"));
+    expect(nameCollisions(items)).toContain("dupe"); // --pick 1,2 would shadow
+    const r = selectByNames(items, ["dupe"]);
+    expect(r.ambiguous).toEqual(["dupe"]); // --only dupe is ambiguous, not silently last-wins
+    expect(r.selected).toEqual([]);
+    rmSync(dup, { recursive: true, force: true });
   });
 
   it("installs only the chosen subset", () => {
