@@ -48,8 +48,9 @@ function settingsScript(cmd: string, baseDir: string, projectDir?: string): Scri
   // Windows backslashes to `/` so the path regex (and a `C:\…` project dir) parse.
   let c = toPosix(cmd.replace(/["']/g, ""));
   if (projectDir) c = toPosix(c.replace(/\$\{?CLAUDE_PROJECT_DIR\}?/g, toPosix(projectDir)));
-  // Optional `C:` drive prefix so a Windows absolute path isn't truncated to `/Users/…`.
-  const m = /((?:[A-Za-z]:)?(?:\/|~\/|\.{0,2}\/)?[\w./-]+\.(sh|bash|zsh|py|js|cjs|mjs|ts|rb|pl|ps1))\b/i.exec(c);
+  // Optional `C:` drive prefix so a Windows absolute path isn't truncated to `/Users/…`,
+  // and allow `~` mid-path (Windows 8.3 short names like RUNNER~1 in a temp path).
+  const m = /((?:[A-Za-z]:)?(?:\/|~\/|\.{0,2}\/)?[\w./~-]+\.(sh|bash|zsh|py|js|cjs|mjs|ts|rb|pl|ps1))\b/i.exec(c);
   if (!m) return null;
   const rel = m[1];
   let abs: string;
