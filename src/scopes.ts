@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, dirname, basename } from "node:path";
 import { findSkillFiles } from "./discover.js";
+import { yellow, dim } from "./color.js";
 
 export type ScopeName = "project" | "user";
 
@@ -97,15 +98,17 @@ export function shadowNotices(opts: {
   const notices: string[] = [];
   for (const name of collisions) {
     notices.push(
-      opts.global
-        ? `  ⚠ "${name}" also exists as a project skill — this personal one runs; the project one is shadowed.`
-        : `  ⚠ "${name}" is also a personal skill (~/.claude) — the personal one runs; this project one is shadowed.`
+      yellow(
+        opts.global
+          ? `  ⚠ "${name}" also exists as a project skill — this personal one runs; the project one is shadowed.`
+          : `  ⚠ "${name}" is also a personal skill (~/.claude) — the personal one runs; this project one is shadowed.`
+      )
     );
   }
   if (opts.other.length > 0) {
     const label = opts.global ? "project" : "personal";
     notices.push(
-      `  ℹ ${opts.other.length} ${label} skill(s) not shown — run \`preflight ${opts.command} --all\` to include them.`
+      dim(`  ℹ ${opts.other.length} ${label} skill(s) not shown — run \`preflight ${opts.command} --all\` to include them.`)
     );
   }
   return notices;
