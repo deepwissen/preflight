@@ -67,7 +67,7 @@ function scopesFromFlags(
   return [projectScope(projectRoot)];
 }
 
-const VERSION = "0.4.1"; // keep in sync with package.json
+const VERSION = "0.5.0"; // keep in sync with package.json
 
 /** Read one line from stdin (interactive skill selection). */
 function promptLine(question: string): Promise<string> {
@@ -415,6 +415,19 @@ async function runAdd(
       err(
         `preflight: blocked — ${collisions.join(", ")} name${collisions.length > 1 ? "" : "s"} more than one selected skill; ` +
           `they'd install to the same folder and shadow each other. Install them one at a time.\n`
+      );
+      return 2;
+    }
+
+    // Refuse to install a skill that ships an escaping symlink (a read primitive whose
+    // target can change after install) — even with --force. Structural, not a finding gate.
+    const linked = selected.filter((s) =>
+      s.row.bundle.scripts.some((sc) => sc.findings.some((f) => f.rule === "bundle-symlink"))
+    );
+    if (linked.length) {
+      err(
+        `preflight: blocked — ${linked.map((s) => s.name).join(", ")} ship${linked.length > 1 ? "" : "s"} a symlink ` +
+          `pointing outside the skill (a read primitive). Refusing even with --force — remove the link.\n`
       );
       return 2;
     }

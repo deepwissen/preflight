@@ -104,14 +104,40 @@ export function scanInstruction(path: string, content: string): Finding[] {
   snap.activeFile = fileInfo(path, content);
   snap.aiInstructionFiles = [{ path, lineCount: content.split("\n").length, toolId: null, content }];
 
+  // Lines inside fenced code blocks (``` / ~~~) are examples, not instructions the
+  // agent follows — suppress secret/injection/role-tag findings there (xoxp-placeholders,
+  // `authorizationToken` samples, a `system:` key in a ```yaml block). Hidden-unicode and
+  // bidi are kept everywhere — a smuggled char in an example is still a smuggled char.
+  const fenced = fencedLines(content);
+  const KEEP_IN_FENCE = new Set(["hidden-unicode", "bidi-override"]);
+  const inExampleFence = (line?: number, rule?: string): boolean =>
+    Boolean(line && fenced.has(line)) && !KEEP_IN_FENCE.has(rule ?? "");
+
   const out: Finding[] = [];
   for (const f of scanSecrets(snap, {}).secretFindings ?? []) {
+    if (inExampleFence(f.lineNumber, f.ruleId)) continue;
     out.push({ severity: f.severity, rule: f.ruleId, message: f.description, line: f.lineNumber, suggestion: f.suggestion });
   }
   for (const i of scanInstructionIntegrity(snap, {}).instructionFileIssues ?? []) {
+    if (inExampleFence(i.lineNumber, i.issue)) continue;
     out.push({ severity: i.severity ?? "warning", rule: i.issue, message: i.description, line: i.lineNumber, suggestion: i.suggestion });
   }
   return out;
+}
+
+/** 1-based line numbers inside fenced code blocks (``` or ~~~), fence markers included. */
+function fencedLines(content: string): Set<number> {
+  const set = new Set<number>();
+  let inFence = false;
+  content.split(/\r?\n/).forEach((line, idx) => {
+    if (/^\s{0,3}(```|~~~)/.test(line)) {
+      set.add(idx + 1); // the fence marker line itself
+      inFence = !inFence;
+      return;
+    }
+    if (inFence) set.add(idx + 1);
+  });
+  return set;
 }
 
 function lineFrom(text: string): number | undefined {
