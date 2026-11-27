@@ -15,6 +15,11 @@ npx @deepwissen/preflight manifest      # run without installing
 npm i -g @deepwissen/preflight          # or install the `preflight` command
 ```
 
+**Requirements:** Node.js 18+, and `git` on your PATH for `add owner/repo`.
+**Platforms:** macOS and Linux are tested and supported. Windows support is in
+progress — it runs, but some file-name checks and Windows-specific attack patterns
+aren't fully covered yet.
+
 ## `preflight manifest`
 
 Inventory every skill your agent carries, with its **declared scope**, **static

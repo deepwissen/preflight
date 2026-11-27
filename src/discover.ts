@@ -1,5 +1,6 @@
 import { readdirSync, statSync, lstatSync, existsSync, readFileSync } from "node:fs";
-import { join, relative, resolve, basename, dirname } from "node:path";
+import { relPosix } from "./paths.js";
+import { join, resolve, basename, dirname } from "node:path";
 import { isSkillScopeFile, extractSkillScope } from "@deepwissen/preflight-core";
 
 const SKIP_DIRS = new Set([
@@ -34,7 +35,7 @@ function walkFiles(root: string, skip: Set<string>, keep: (rel: string) => boole
       if (s.isDirectory()) {
         if (!skip.has(name)) walk(abs);
       } else {
-        const rel = relative(root, abs);
+        const rel = relPosix(root, abs);
         if (keep(rel)) out.push(rel);
       }
     }
@@ -107,7 +108,7 @@ export interface Resolved {
 }
 
 function relOrAbs(root: string, abs: string): string {
-  const r = relative(root, abs);
+  const r = relPosix(root, abs);
   return r && !r.startsWith("..") ? r : abs;
 }
 

@@ -1,7 +1,8 @@
 import { readdirSync, lstatSync, readlinkSync, readFileSync } from "node:fs";
-import { join, dirname, relative, extname, resolve, sep } from "node:path";
+import { join, dirname, extname, resolve, sep } from "node:path";
 import { scanCode, scanInstruction, scanMcpConfig, looksMcpConfig, type Finding } from "./scan.js";
 import { scanDangerous } from "./danger.js";
+import { relPosix } from "./paths.js";
 
 // Executable/script file types a skill may ship alongside its SKILL.md. The agent
 // can be told to run these, so they're code the skill carries — worth scanning.
@@ -17,6 +18,9 @@ const SCRIPT_LANG: Record<string, string> = {
   ".mjs": "javascript",
   ".ts": "typescript",
   ".ps1": "powershell",
+  ".psm1": "powershell",
+  ".cmd": "bat",
+  ".bat": "bat",
 };
 
 const MAX_BYTES = 256 * 1024; // don't read very large files into memory
@@ -75,7 +79,7 @@ export function enumerateBundle(skillAbsPath: string): Bundle {
       // a read primitive (e.g. notes.md → ~/.aws/credentials). Flag; never follow it.
       if (s.isSymbolicLink()) {
         count++;
-        const rel = relative(root, abs);
+        const rel = relPosix(root, abs);
         let target = "";
         try {
           target = readlinkSync(abs);
@@ -107,7 +111,7 @@ export function enumerateBundle(skillAbsPath: string): Bundle {
       count++;
       const ext = extname(name).toLowerCase();
       let lang = SCRIPT_LANG[ext];
-      const rel = relative(root, abs);
+      const rel = relPosix(root, abs);
 
       // Promote extension-less executables (shebang on line 1) and Makefiles to
       // "script" so their dangerous commands get scanned too (curl|sh in a `run`

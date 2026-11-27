@@ -4,8 +4,14 @@ on:
     branches: [main]
   pull_request:
 jobs:
+  # Unit tests on all three OSes — Windows especially, to catch path-separator bugs
+  # (a `\`-path breaking an exact file-name check, or a backslash in a SARIF URI).
   build-test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

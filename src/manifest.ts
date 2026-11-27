@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join, dirname, relative, resolve } from "node:path";
 import { extractSkillScope, type SkillScope } from "@deepwissen/preflight-core";
 import { findSkillFiles, findContextFiles, contextKind } from "./discover.js";
+import { relPosix } from "./paths.js";
 import { scanSkill, scanInstruction, scanMcpConfig, type Finding } from "./scan.js";
 import { enumerateBundle, type Bundle } from "./bundle.js";
 import { scanSettings } from "./hooks.js";
@@ -206,7 +207,7 @@ function scopeSettingsRisks(scope: Scope): LocatedFinding[] {
   const home = homedir();
   const out: LocatedFinding[] = [];
   for (const sf of scope.settingsFiles) {
-    const file = scope.name === "user" ? sf.replace(home, "~") : relative(scope.scanRoot, sf) || sf;
+    const file = scope.name === "user" ? sf.replace(home, "~") : relPosix(scope.scanRoot, sf) || sf;
     for (const f of scanSettings(sf)) {
       out.push({ file, rule: f.rule, severity: f.severity, message: f.message, line: f.line });
     }

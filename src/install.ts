@@ -11,7 +11,8 @@ import {
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join, dirname, basename, resolve, relative } from "node:path";
+import { join, dirname, basename, resolve } from "node:path";
+import { relPosix } from "./paths.js";
 import { findSkillFiles, resolveSkill } from "./discover.js";
 import { buildRow, type SkillRow } from "./manifest.js";
 
@@ -211,7 +212,7 @@ export function removeSkill(
     return { error: `remove supports SKILL.md skills only (got ${res.displayPath})` };
   }
   const skillDir = dirname(res.absPath);
-  const rel = relative(root, skillDir);
+  const rel = relPosix(root, skillDir);
   if (!rel || rel.startsWith("..")) {
     return { error: `refusing to remove ${skillDir} — outside the project` };
   }

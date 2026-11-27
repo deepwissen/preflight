@@ -76,7 +76,16 @@ const LANG_FETCH_EXEC = /\b(?:exec|eval)\s*\([^\n]*\b(?:urlopen|urllib|requests\
 // PowerShell download-and-run: iex / Invoke-Expression of iwr / Invoke-WebRequest /
 // DownloadString / Net.WebClient.
 const PS_FETCH_EXEC =
-  /\b(?:iex|invoke-expression)\b[^\n]*\b(?:iwr|invoke-webrequest|downloadstring|net\.webclient|curl|wget)\b/i;
+  /\b(?:iex|invoke-expression)\b[^\n]*\b(?:irm|iwr|invoke-restmethod|invoke-webrequest|downloadstring|net\.webclient|curl|wget)\b|\b(?:irm|iwr|invoke-restmethod|invoke-webrequest|downloadstring)\b[^\n]*\|\s*(?:iex|invoke-expression)\b/i;
+// PowerShell encoded command — `powershell -enc <base64>` / -EncodedCommand — obfuscated
+// execution. The flag needs a space + base64 blob, so -ExecutionPolicy doesn't match.
+const PS_ENCODED = /\b(?:powershell|pwsh)(?:\.exe)?\b[^\n]*\s-e(?:c|nc|ncodedcommand)?\s+[A-Za-z0-9+/=]{16,}/i;
+// Windows LOLBin downloaders — certutil -urlcache <url>, bitsadmin /transfer, Start-BitsTransfer.
+const WIN_DOWNLOAD =
+  /\bcertutil(?:\.exe)?\b[^\n]*\bhttps?:\/\/|\bbitsadmin(?:\.exe)?\b[^\n]*\/transfer\b|\bstart-bitstransfer\b/i;
+// Windows recursive delete of the profile, a drive root, or a system dir.
+const WIN_DESTRUCTIVE =
+  /\b(?:rmdir|rd|del)\b[^\n]*\s\/s\b[^\n]*(?:%(?:USERPROFILE|HOMEPATH|APPDATA|SYSTEMROOT|WINDIR|SYSTEMDRIVE)%|\b[A-Za-z]:\\?(?:\s|$|\\\*))/i;
 // Environment dump piped straight to the network (`env | curl -d @-`) — exfiltration.
 const ENV_EXFIL = /\b(?:env|printenv)\b\s*\|\s*(?:curl|wget|nc|ncat)\b/i;
 // The session transcript read and piped to the network — a hook gets transcript_path
@@ -139,7 +148,13 @@ export function scanDangerous(text: string, where: string, prefix: string, markd
   if (LANG_FETCH_EXEC.test(text))
     hits.push({ kind: "remote-eval", severity: "error", what: "fetches remote code and exec/evals it in-process (remote code execution)" });
   if (PS_FETCH_EXEC.test(text))
-    hits.push({ kind: "ps-fetch-execute", severity: "error", what: "PowerShell downloads and executes remote code (iex/iwr) (remote code execution)" });
+    hits.push({ kind: "ps-fetch-execute", severity: "error", what: "PowerShell downloads and executes remote code (iex/irm/iwr) (remote code execution)" });
+  if (PS_ENCODED.test(text))
+    hits.push({ kind: "ps-encoded", severity: "error", what: "runs a base64-encoded PowerShell command (powershell -enc — obfuscated execution)" });
+  if (WIN_DOWNLOAD.test(text))
+    hits.push({ kind: "win-download", severity: "error", what: "downloads a remote file via a Windows LOLBin (certutil / bitsadmin) — malware staging" });
+  if (WIN_DESTRUCTIVE.test(text))
+    hits.push({ kind: "destructive", severity: "error", what: "recursively deletes a home/root/system or credential path" });
   if (ENV_EXFIL.test(text))
     hits.push({ kind: "env-exfil", severity: "error", what: "pipes the environment (secrets) to a remote host (exfiltration)" });
   if (TRANSCRIPT_EXFIL.test(text))
