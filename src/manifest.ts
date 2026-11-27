@@ -176,12 +176,16 @@ export interface LocatedFinding {
 export function reportFindings(report: ManifestReport): LocatedFinding[] {
   const out: LocatedFinding[] = [];
   for (const r of report.rows) {
+    // Under --all, a user-scope path is relative to ~/.claude and otherwise looks
+    // identical to a project path (skills/x/SKILL.md). Prefix it so code-scanning /
+    // SARIF consumers can tell personal skills from committed ones.
+    const prefix = r.origin === "user" ? "~/.claude/" : "";
     for (const f of r.findings) {
-      out.push({ file: r.path, rule: f.rule, severity: f.severity, message: f.message, line: f.line });
+      out.push({ file: prefix + r.path, rule: f.rule, severity: f.severity, message: f.message, line: f.line });
     }
     const dir = dirname(r.path);
     for (const sc of r.bundle.scripts) {
-      const uri = dir === "." ? sc.path : `${dir}/${sc.path}`;
+      const uri = prefix + (dir === "." ? sc.path : `${dir}/${sc.path}`);
       for (const f of sc.findings) {
         out.push({ file: uri, rule: f.rule, severity: f.severity, message: f.message, line: f.line });
       }
@@ -212,12 +216,33 @@ function scopeSettingsRisks(scope: Scope): LocatedFinding[] {
   if (scope.name === "project") {
     const mcp = join(scope.scanRoot, ".mcp.json");
     if (existsSync(mcp)) {
+      let content: string | null = null;
       try {
-        for (const f of scanMcpConfig(".mcp.json", readFileSync(mcp, "utf8"))) {
-          out.push({ file: ".mcp.json", rule: f.rule, severity: f.severity, message: f.message, line: f.line });
-        }
+        content = readFileSync(mcp, "utf8");
       } catch {
-        /* unreadable — skip */
+        content = null;
+      }
+      if (content !== null) {
+        let valid = true;
+        try {
+          JSON.parse(content);
+        } catch {
+          valid = false;
+        }
+        if (!valid) {
+          // Consistent with invalid settings.json (which warns) — don't silently skip a
+          // malformed MCP config; a hidden server could be in there.
+          out.push({
+            file: ".mcp.json",
+            rule: "mcp-unparseable",
+            severity: "warning",
+            message: ".mcp.json is not valid JSON — its servers can't be audited",
+          });
+        } else {
+          for (const f of scanMcpConfig(".mcp.json", content)) {
+            out.push({ file: ".mcp.json", rule: f.rule, severity: f.severity, message: f.message, line: f.line });
+          }
+        }
       }
     }
   }
