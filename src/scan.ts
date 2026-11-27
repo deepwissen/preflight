@@ -9,6 +9,7 @@ import {
   type FileInfo,
 } from "@deepwissen/preflight-core";
 import { scanDangerous } from "./danger.js";
+import { toPosix } from "./paths.js";
 
 export interface Finding {
   severity: "info" | "warning" | "error";
@@ -55,6 +56,7 @@ function fileInfo(path: string, content: string, languageId = "markdown"): FileI
  * spoofing), and over-broad declared tool scope. All detection is the engine's.
  */
 export function scanSkill(path: string, content: string): Finding[] {
+  path = toPosix(path);
   const snap = emptySnapshot();
   snap.activeFile = fileInfo(path, content);
   snap.aiInstructionFiles = [
@@ -103,6 +105,7 @@ export function scanSkill(path: string, content: string): Finding[] {
  * backdoor" hides in — a repo's CLAUDE.md or rule steering the agent on every turn.
  */
 export function scanInstruction(path: string, content: string): Finding[] {
+  path = toPosix(path);
   const snap = emptySnapshot();
   snap.activeFile = fileInfo(path, content);
   snap.aiInstructionFiles = [{ path, lineCount: content.split("\n").length, toolId: null, content }];
@@ -195,6 +198,7 @@ function lineFrom(text: string): number | undefined {
  * scope checks do NOT apply: this is code, not an instruction surface.
  */
 export function scanCode(path: string, content: string, languageId: string): Finding[] {
+  path = toPosix(path);
   const snap = emptySnapshot();
   snap.activeFile = fileInfo(path, content, languageId);
   snap.aiInstructionFiles = [{ path, lineCount: content.split("\n").length, toolId: null, content }];
@@ -238,6 +242,7 @@ export function scanCode(path: string, content: string, languageId: string): Fin
  * base-URL, marketplaces, deep hook analysis) — no overlap, no double-reporting.
  */
 export function scanAgentConfigFile(path: string, content: string): Finding[] {
+  path = toPosix(path);
   const snap = emptySnapshot();
   snap.activeFile = fileInfo(path, content, "json");
   // The engine appends " (<path>)" to each description; preflight groups findings by
@@ -265,6 +270,7 @@ export function looksMcpConfig(path: string, content: string): boolean {
  * up to a server — a supply-chain surface the SKILL.md prose hides.
  */
 export function scanMcpConfig(path: string, content: string): Finding[] {
+  path = toPosix(path);
   const snap = emptySnapshot();
   snap.activeFile = fileInfo(path, content, "json");
   snap.mcpConfigFiles = [{ path, content }];
