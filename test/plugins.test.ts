@@ -161,3 +161,20 @@ describe("discoverPlugins (installed_plugins.json, CC 2.1.332 layout)", () => {
     for (const n of ["hooky", "inline", "extplug", "hookify"]) expect(view).toContain(n);
   });
 });
+
+describe("discoverPlugins — corrupt plugin list", () => {
+  it("throws (so the CLI exits 2) instead of silently reporting 0 plugins", () => {
+    const home = mkdtempSync(join(tmpdir(), "pf-corrupt-"));
+    const prev = process.env.HOME;
+    try {
+      mkdirSync(join(home, ".claude", "plugins"), { recursive: true });
+      writeFileSync(join(home, ".claude", "plugins", "installed_plugins.json"), "not json {{{");
+      process.env.HOME = home;
+      expect(() => discoverPlugins()).toThrow(/plugin list/i);
+    } finally {
+      if (prev === undefined) delete process.env.HOME;
+      else process.env.HOME = prev;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});

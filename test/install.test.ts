@@ -2,7 +2,26 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isGitRef, planInstall, installItem, removeSkill } from "../src/install.js";
+import { isGitRef, parseGitHubTreeUrl, planInstall, installItem, removeSkill } from "../src/install.js";
+
+describe("parseGitHubTreeUrl", () => {
+  it("extracts repo, branch, and subpath from a tree/blob browser URL", () => {
+    expect(parseGitHubTreeUrl("https://github.com/anthropics/skills/tree/main/skills/pdf")).toEqual({
+      url: "https://github.com/anthropics/skills.git",
+      branch: "main",
+      sub: "skills/pdf",
+    });
+    expect(parseGitHubTreeUrl("https://github.com/o/r/blob/dev/a/b/c")).toEqual({
+      url: "https://github.com/o/r.git",
+      branch: "dev",
+      sub: "a/b/c",
+    });
+  });
+  it("returns null for a plain repo URL or shorthand", () => {
+    expect(parseGitHubTreeUrl("https://github.com/anthropics/skills")).toBeNull();
+    expect(parseGitHubTreeUrl("anthropics/skills")).toBeNull();
+  });
+});
 
 let work: string; // a "source" tree
 let proj: string; // the target project

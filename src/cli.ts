@@ -300,7 +300,12 @@ function runList(argv: string[], out: (s: string) => void, err: (s: string) => v
     const parsed = parseArgs({
       args: argv,
       allowPositionals: true,
-      options: { global: { type: "boolean" }, all: { type: "boolean" } },
+      options: {
+        global: { type: "boolean" },
+        all: { type: "boolean" },
+        json: { type: "boolean" },
+        sarif: { type: "boolean" },
+      },
     });
     values = parsed.values;
     positionals = parsed.positionals;
@@ -314,6 +319,16 @@ function runList(argv: string[], out: (s: string) => void, err: (s: string) => v
     return 2;
   }
   const report = buildScopes(scopesFromFlags(values, projectRoot));
+  // --json / --sarif are documented as global output formats; honor them on list too
+  // (same report as manifest, lighter human view by default).
+  if (values.sarif) {
+    out(renderManifestSarif(report) + "\n");
+    return 0;
+  }
+  if (values.json) {
+    out(renderJson(report) + "\n");
+    return 0;
+  }
   out(renderList(report) + "\n");
   const notices = crossScopeNotices(values, projectRoot, report, "list");
   if (notices.length) out(notices.join("\n") + "\n");
@@ -372,6 +387,12 @@ async function runAdd(
   }
 
   const target = values.global ? userScope() : projectScope();
+  // A clean error instead of an EEXIST/ENOTDIR stack trace when .claude/skills exists
+  // but is a file (or any non-directory) — install would crash trying to mkdir into it.
+  if (existsSync(target.skillsDir) && !statSync(target.skillsDir).isDirectory()) {
+    err(`preflight: ${target.skillsDir} exists but is not a directory — remove or move it, then retry\n`);
+    return 2;
+  }
   try {
     const items = planInstall(staging.dir, target.skillsDir);
     if (items.length === 0) {
@@ -577,7 +598,13 @@ function runPlugins(argv: string[], out: (s: string) => void, err: (s: string) =
     err(`preflight: --fail-on must be one of ${FAIL_ON.join(", ")}\n`);
     return 2;
   }
-  const plugins = discoverPlugins();
+  let plugins: PluginInfo[];
+  try {
+    plugins = discoverPlugins();
+  } catch (e) {
+    err(`preflight: ${(e as Error).message}\n`);
+    return 2;
+  }
   out(
     (values.sarif
       ? renderPluginsSarif(plugins)

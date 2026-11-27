@@ -98,13 +98,21 @@ function splitKey(key: string): [string, string] {
 }
 
 function readInstalled(base: string): Record<string, InstallRecord[]> {
+  const file = join(base, "installed_plugins.json");
+  if (!existsSync(file)) return {}; // genuinely no plugins installed — fine
+  let raw: string;
   try {
-    const j = JSON.parse(readFileSync(join(base, "installed_plugins.json"), "utf8")) as {
-      plugins?: Record<string, InstallRecord[]>;
-    };
+    raw = readFileSync(file, "utf8");
+  } catch {
+    // The list exists but can't be read — a security tool must NOT report "0 plugins"
+    // (that reads as "nothing to audit"); surface it so the caller can fail.
+    throw new Error("couldn't read the plugin list — installed_plugins.json is unreadable");
+  }
+  try {
+    const j = JSON.parse(raw) as { plugins?: Record<string, InstallRecord[]> };
     return j?.plugins ?? {};
   } catch {
-    return {};
+    throw new Error("couldn't read the plugin list — installed_plugins.json is not valid JSON");
   }
 }
 

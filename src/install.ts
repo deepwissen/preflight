@@ -33,10 +33,31 @@ export interface Staging {
 
 /** Copy/clone a source into a throwaway directory so it can be scanned before it
  *  ever touches the project. Caller MUST call cleanup(). */
+/** A GitHub "tree"/"blob" browser URL → the cloneable repo, its branch, and the
+ *  subpath the user actually wants (people paste these straight from the address bar).
+ *  `https://github.com/owner/repo/tree/main/skills/pdf` → clone owner/repo@main, use
+ *  skills/pdf. Returns null for a plain repo URL. */
+export function parseGitHubTreeUrl(src: string): { url: string; branch: string; sub: string } | null {
+  const m = /^https?:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/(?:tree|blob)\/([^/]+)\/(.+?)\/?$/.exec(src);
+  if (!m) return null;
+  return { url: `https://github.com/${m[1]}/${m[2]}.git`, branch: m[3], sub: m[4] };
+}
+
 export function stageSource(src: string): Staging {
   const tmp = mkdtempSync(join(tmpdir(), "preflight-add-"));
   const cleanup = (): void => rmSync(tmp, { recursive: true, force: true });
   try {
+    const tree = parseGitHubTreeUrl(src);
+    if (tree) {
+      execFileSync(
+        "git",
+        ["clone", "--depth", "1", "--quiet", "--branch", tree.branch, tree.url, join(tmp, "repo")],
+        { stdio: ["ignore", "pipe", "pipe"] }
+      );
+      const subDir = join(tmp, "repo", tree.sub);
+      if (!existsSync(subDir)) throw new Error(`"${tree.sub}" is not in that repo`);
+      return { dir: subDir, cleanup };
+    }
     if (isGitRef(src)) {
       const url = /^(https?:|git@)/.test(src) ? src : `https://github.com/${src}.git`;
       execFileSync("git", ["clone", "--depth", "1", "--quiet", url, join(tmp, "repo")], {
