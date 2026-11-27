@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
-import { resolve, dirname, join } from "node:path";
+import { resolve, dirname, join, basename, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import {
   buildScopes,
@@ -34,6 +34,7 @@ import { renderManifestSarif, renderPluginsSarif } from "./sarif.js";
 import { discoverPlugins, type PluginInfo } from "./plugins.js";
 import {
   stageSource,
+  isGitRef,
   planInstall,
   installItem,
   removeSkill,
@@ -464,13 +465,26 @@ async function runAdd(
     const bad = selected.filter((s) => s.row.errorCount || s.row.warnCount);
     const badNames = bad.map((s) => s.name).join(", ");
 
+    // The real on-disk path to inspect, for a LOCAL source (a cloned repo is staged
+    // in a temp dir that's gone after this runs, so there's no stable path to point
+    // at — the findings inline are the whole answer there). Mirrors stageSource's
+    // root choice so `preflight check <path>` is one copy-paste.
+    const localRoot = isGitRef(src) ? null : statSync(resolve(src)).isFile() ? dirname(resolve(src)) : resolve(src);
+    const inspectPath = new Map(
+      bad.map((s) => [
+        s.row,
+        localRoot ? join(localRoot, relative(join(staging.dir, basename(localRoot)), s.srcDir)) : undefined,
+      ] as const)
+    );
+    const blocked = (): string => renderBlockedFindings(bad.map((s) => s.row), (r) => inspectPath.get(r));
+
     // A dry run installs nothing either way — report what WOULD happen, with the
     // findings inline, never "--force to install anyway".
     if (values["dry-run"]) {
       if (gated) {
         out(
           `\ndry run — would be BLOCKED: ${badNames} ha${bad.length > 1 ? "ve" : "s"} findings at/above "${failOn}" (nothing installed):\n` +
-            renderBlockedFindings(bad.map((s) => s.row)) +
+            blocked() +
             `\n`
         );
       } else {
@@ -482,8 +496,8 @@ async function runAdd(
     if (gated && !values.force) {
       err(
         `\npreflight: blocked — ${badNames} ha${bad.length > 1 ? "ve" : "s"} findings at/above "${failOn}":\n` +
-          renderBlockedFindings(bad.map((s) => s.row)) +
-          `\n\n  Inspect before trusting it: preflight check <name|path>. ` +
+          blocked() +
+          `\n\n  Inspect before trusting it with preflight check (path above, or <name> once installed). ` +
           `Install anyway (not recommended) with --force.\n`
       );
       return 1;

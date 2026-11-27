@@ -75,11 +75,23 @@ describe("renderBlockedFindings (add gate / dry-run surface the reason)", () => 
   it("lists each blocked skill's findings inline, not just a --force hint", () => {
     const r = resolveSkill(root, "aws-deploy");
     if ("error" in r) throw new Error(r.error);
-    const out = renderBlockedFindings([buildRow(r.absPath, r.displayPath)]);
+    const row = buildRow(r.absPath, r.displayPath);
+    const out = renderBlockedFindings([row]);
     expect(out).toContain("aws-deploy");
     expect(out).toContain("finding"); // "(N finding(s))"
     expect(out).toMatch(/\[(error|warning)\]/); // a severity-tagged finding line
+    expect(out).toContain("SKILL.md:"); // own-file finding is still named, like a bundle's path
     expect(out).not.toContain("--force"); // the reason, not just the escape hatch
+  });
+
+  it("appends a concrete inspect path when one is provided (local source)", () => {
+    const r = resolveSkill(root, "aws-deploy");
+    if ("error" in r) throw new Error(r.error);
+    const row = buildRow(r.absPath, r.displayPath);
+    const out = renderBlockedFindings([row], () => "/abs/path/aws-deploy");
+    expect(out).toContain("→ inspect: preflight check /abs/path/aws-deploy");
+    // and omits the line when no path is available (e.g. a cloned repo)
+    expect(renderBlockedFindings([row])).not.toContain("→ inspect");
   });
 
   it("skips skills with no findings", () => {

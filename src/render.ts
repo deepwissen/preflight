@@ -2,6 +2,7 @@ import { flatFindings, type LocatedFinding, type ManifestReport, type SkillRow }
 import { detectCollisions, detectAmbiguities, analyzeConflicts } from "./collisions.js";
 import { skillHealth, type HealthStatus } from "./health.js";
 import type { InstallItem } from "./install.js";
+import { basename } from "node:path";
 
 function hmark(s: HealthStatus): string {
   return s === "ok" ? "✓" : s === "info" ? "ℹ" : s === "warn" ? "⚠" : "✗";
@@ -276,7 +277,12 @@ export function renderPlugins(plugins: import("./plugins.js").PluginInfo[]): str
 /** Compact one-line-per-skill listing of what's installed. */
 export function renderList(report: ManifestReport): string {
   const { rows } = report;
-  if (rows.length === 0) return "No agent skills installed.";
+  if (rows.length === 0) {
+    return (
+      "No agent skills installed.\n\n" +
+      "Try:  preflight add anthropics/skills --dry-run   — scan a repo's skills, install nothing"
+    );
+  }
   const nameW = Math.max(4, ...rows.map((r) => (r.name ?? r.path).length));
   const scopeW = Math.max(10, ...rows.map((r) => r.scopeLabel.length));
   const showWhere = rows.some((r) => r.origin);
@@ -372,7 +378,10 @@ export function renderCheck(row: SkillRow): string {
 /** Compact per-skill findings list for the add gate and dry-run — shows the user
  *  WHY a skill is blocked inline, instead of leaving `--force` as the only visible
  *  way forward. Points each skill at `preflight check <path>` for the full report. */
-export function renderBlockedFindings(rows: SkillRow[]): string {
+export function renderBlockedFindings(
+  rows: SkillRow[],
+  pathFor?: (r: SkillRow) => string | undefined
+): string {
   const L: string[] = [];
   for (const r of rows) {
     const fs = flatFindings(r);
@@ -380,9 +389,13 @@ export function renderBlockedFindings(rows: SkillRow[]): string {
     L.push(`  ${r.name ?? r.path}  (${fs.length} finding${fs.length > 1 ? "s" : ""})`);
     for (const { file, finding: f } of fs) {
       const mark = f.severity === "error" ? "✗" : f.severity === "warning" ? "⚠" : "ℹ";
-      const where = file !== r.path ? `${file}: ` : "";
-      L.push(`     ${mark} [${f.severity}] ${where}${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`);
+      // Always name the file for consistency — SKILL.md: like a bundle's scripts/x.py:
+      // (a finding in the skill's own file carries the full path; show just the basename).
+      const where = file === r.path ? basename(file) : file;
+      L.push(`     ${mark} [${f.severity}] ${where}: ${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`);
     }
+    const p = pathFor?.(r);
+    if (p) L.push(`     → inspect: preflight check ${p}`);
   }
   return L.join("\n");
 }

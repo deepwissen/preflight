@@ -7,6 +7,7 @@ import {
   existsSync,
   statSync,
   readdirSync,
+  writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -195,8 +196,12 @@ export function removeSkill(
   }
   if (!opts.yes) return { wouldRemove: rel, files: countFiles(skillDir) };
 
-  const trash = join(root, ".preflight-trash", basename(skillDir));
-  mkdirSync(dirname(trash), { recursive: true });
+  const trashRoot = join(root, ".preflight-trash");
+  const trash = join(trashRoot, basename(skillDir));
+  mkdirSync(trashRoot, { recursive: true });
+  // Make the trash self-ignoring so a new user never accidentally commits it —
+  // a `.gitignore` of `*` hides the whole folder (including itself) from git.
+  writeFileSync(join(trashRoot, ".gitignore"), "*\n");
   rmSync(trash, { recursive: true, force: true });
   renameSync(skillDir, trash);
   return { removed: rel };
