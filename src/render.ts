@@ -3,9 +3,15 @@ import { detectCollisions, detectAmbiguities, analyzeConflicts } from "./collisi
 import { skillHealth, type HealthStatus } from "./health.js";
 import type { InstallItem } from "./install.js";
 import { basename } from "node:path";
+import { red, redBold, yellow, green, cyan, bold, dim } from "./color.js";
+
+/** Color a severity mark/label: error red+bold, warning yellow, else green. */
+function sev(severity: string, s: string): string {
+  return severity === "error" ? redBold(s) : severity === "warning" ? yellow(s) : green(s);
+}
 
 function hmark(s: HealthStatus): string {
-  return s === "ok" ? "✓" : s === "info" ? "ℹ" : s === "warn" ? "⚠" : "✗";
+  return s === "ok" ? green("✓") : s === "info" ? dim("ℹ") : s === "warn" ? yellow("⚠") : redBold("✗");
 }
 
 /** Strip a trailing "in <file> line N" / "line N" the engine embeds in some messages,
@@ -50,12 +56,13 @@ function pad(s: string, w: number): string {
   return s.length >= w ? s.slice(0, w) : s + " ".repeat(w - s.length);
 }
 
-// Unified per-skill status vocabulary used everywhere: ✓ clean · ⚠ N · ✗ N.
+// Unified per-skill status vocabulary used everywhere: ✓ clean · ⚠ N · ✗ N. Color
+// reinforces the symbol (which always carries the meaning for colorblind readers).
 function checkLabel(r: SkillRow): string {
   const total = r.errorCount + r.warnCount;
-  if (r.errorCount) return `✗ ${total} issue${total > 1 ? "s" : ""}`;
-  if (r.warnCount) return `⚠ ${total} issue${total > 1 ? "s" : ""}`;
-  return "✓ clean";
+  if (r.errorCount) return redBold(`✗ ${total} issue${total > 1 ? "s" : ""}`);
+  if (r.warnCount) return yellow(`⚠ ${total} issue${total > 1 ? "s" : ""}`);
+  return green("✓ clean");
 }
 
 /** One-line, answer-first summary for list/manifest: mark + counts + per-prompt cost. */
@@ -70,7 +77,7 @@ export function summaryLine(report: ManifestReport): string {
   const need = rows.filter((r) => flatFindings(r).length > 0).length;
   const conflicts = detectCollisions(rows).length + detectAmbiguities(rows).length;
   const anyErr = rows.some((r) => r.errorCount > 0) || cfgErr > 0 || ctxErr > 0;
-  const mark = anyErr ? "✗" : need || conflicts || cfgIssues || ctxIssues ? "⚠" : "✓";
+  const mark = anyErr ? redBold("✗") : need || conflicts || cfgIssues || ctxIssues ? yellow("⚠") : green("✓");
   const parts: string[] = [`${rows.length} skill${rows.length === 1 ? "" : "s"}`];
   if (need) parts.push(`${need} need${need === 1 ? "s" : ""} attention`);
   else if (!conflicts && !cfgIssues && !ctxIssues) parts.push("all clean");
@@ -93,7 +100,7 @@ function contextSection(report: ManifestReport): string[] {
     `ALWAYS-ON CONTEXT — files your agent reads every session  (~${tok(total)}t${flagged ? `, ${flagged} flagged` : ""})`,
   ];
   for (const c of report.contextFiles) {
-    const worst = c.errorCount ? "✗" : c.warnCount ? "⚠" : c.findings.length ? "ℹ" : "·";
+    const worst = c.errorCount ? redBold("✗") : c.warnCount ? yellow("⚠") : c.findings.length ? dim("ℹ") : dim("·");
     L.push("", `  ${worst} ${c.path}   ~${tok(c.alwaysTokens)}t  (${c.kind})`);
     for (const f of c.findings) L.push(`     • [${f.severity}] ${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`);
   }
@@ -114,7 +121,7 @@ function configSection(report: ManifestReport): string[] {
   const risky = report.settingsRisks.filter((h) => h.severity !== "info").length;
   const L: string[] = ["", `CONFIG & HOOKS — settings your agent loads automatically${risky ? `  (${risky} risky)` : ""}`];
   for (const [file, fs] of byFile) {
-    const worst = fs.some((f) => f.severity === "error") ? "✗" : fs.some((f) => f.severity === "warning") ? "⚠" : "ℹ";
+    const worst = fs.some((f) => f.severity === "error") ? redBold("✗") : fs.some((f) => f.severity === "warning") ? yellow("⚠") : dim("ℹ");
     L.push("", `  ${worst} ${file}`);
     for (const f of fs) L.push(`     • [${f.severity}] ${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`);
   }
@@ -220,8 +227,8 @@ export function renderManifest(report: ManifestReport): string {
   L.push("");
   L.push("─".repeat(78));
   L.push("Footprint is static (descriptions load always, bodies on demand — not every");
-  L.push("prompt). Scope is what each skill DECLARES; prose can instruct more. Checks find");
-  L.push("known-bad patterns — they don't certify a skill safe.");
+  L.push(dim("prompt). Scope is what each skill DECLARES; prose can instruct more. Checks find"));
+  L.push(dim("known-bad patterns — they don't certify a skill safe."));
   return L.join("\n");
 }
 
@@ -230,7 +237,7 @@ export function renderPlugins(plugins: import("./plugins.js").PluginInfo[]): str
   if (plugins.length === 0) return "No installed plugins found (~/.claude/plugins).";
 
   const need = plugins.filter((p) => p.errorCount || p.warnCount).length;
-  const mark = plugins.some((p) => p.errorCount) ? "✗" : need ? "⚠" : "✓";
+  const mark = plugins.some((p) => p.errorCount) ? redBold("✗") : need ? yellow("⚠") : green("✓");
   const markets = [...new Set(plugins.map((p) => p.marketplace))];
   const L: string[] = [
     `preflight · ${mark} ${plugins.length} plugin${plugins.length === 1 ? "" : "s"} · ${
@@ -319,9 +326,10 @@ export function renderCheck(row: SkillRow): string {
   L.push(`  ${row.name ?? row.path}${s.description ? ` — ${s.description}` : ""}`);
 
   const health = skillHealth(row);
-  const vmark = health.verdict === "healthy" ? "✓" : health.verdict === "needs attention" ? "⚠" : "✗";
+  const vcolor = health.verdict === "healthy" ? green : health.verdict === "needs attention" ? yellow : redBold;
+  const vmark = vcolor(health.verdict === "healthy" ? "✓" : health.verdict === "needs attention" ? "⚠" : "✗");
   L.push("");
-  L.push(`HEALTH: ${vmark} ${health.verdict}`);
+  L.push(`HEALTH: ${vmark} ${vcolor(health.verdict)}`);
   for (const d of health.dims) {
     L.push(`  ${hmark(d.status)} ${pad(d.key, 9)} ${d.note}`);
   }
@@ -373,11 +381,11 @@ export function renderCheck(row: SkillRow): string {
     L.push(`FINDINGS (${flat.length})`);
     for (const { file, finding: f } of flat) {
       const mark = f.severity === "error" ? "✗" : f.severity === "warning" ? "⚠" : "ℹ";
-      const where = file !== row.path ? ` in ${file}` : "";
+      const where = file !== row.path ? ` in ${bold(file)}` : "";
       L.push("");
-      L.push(`  ${mark} [${f.severity}] ${f.rule}${f.line ? `  (line ${f.line})` : ""}${where}`);
+      L.push(`  ${sev(f.severity, `${mark} [${f.severity}]`)} ${bold(f.rule)}${f.line ? `  (line ${f.line})` : ""}${where}`);
       L.push(`    ${cleanMsg(f.message)}`);
-      if (f.suggestion) L.push(`    → ${f.suggestion}`);
+      if (f.suggestion) L.push(`    ${cyan(`→ ${f.suggestion}`)}`);
     }
   }
   return L.join("\n");
@@ -394,16 +402,16 @@ export function renderBlockedFindings(
   for (const r of rows) {
     const fs = flatFindings(r);
     if (!fs.length) continue;
-    L.push(`  ${r.name ?? r.path}  (${fs.length} finding${fs.length > 1 ? "s" : ""})`);
+    L.push(`  ${bold(r.name ?? r.path)}  (${fs.length} finding${fs.length > 1 ? "s" : ""})`);
     for (const { file, finding: f } of fs) {
       const mark = f.severity === "error" ? "✗" : f.severity === "warning" ? "⚠" : "ℹ";
       // Always name the file for consistency — SKILL.md: like a bundle's scripts/x.py:
       // (a finding in the skill's own file carries the full path; show just the basename).
       const where = file === r.path ? basename(file) : file;
-      L.push(`     ${mark} [${f.severity}] ${where}: ${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`);
+      L.push(`     ${sev(f.severity, `${mark} [${f.severity}]`)} ${where}: ${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`);
     }
     const p = pathFor?.(r);
-    if (p) L.push(`     → inspect: preflight check ${p}`);
+    if (p) L.push(cyan(`     → inspect: preflight check ${p}`));
   }
   return L.join("\n");
 }

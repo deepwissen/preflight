@@ -31,6 +31,7 @@ import {
   renderPlugins,
 } from "./render.js";
 import { renderManifestSarif, renderPluginsSarif } from "./sarif.js";
+import { setColorEnabled, redBold } from "./color.js";
 import { discoverPlugins, type PluginInfo } from "./plugins.js";
 import {
   stageSource,
@@ -516,7 +517,7 @@ async function runAdd(
 
     if (gated && !values.force) {
       err(
-        `\npreflight: blocked — ${badNames} ha${bad.length > 1 ? "ve" : "s"} findings at/above "${failOn}":\n` +
+        `\n${redBold(`preflight: blocked — ${badNames} ha${bad.length > 1 ? "ve" : "s"} findings at/above "${failOn}":`)}\n` +
           blocked() +
           `\n\n  Inspect before trusting it with preflight check (path above, or <name> once installed). ` +
           `Install anyway (not recommended) with --force.\n`
@@ -623,6 +624,8 @@ export async function run(
   out: (s: string) => void = (s) => void process.stdout.write(s),
   err: (s: string) => void = (s) => void process.stderr.write(s)
 ): Promise<number> {
+  // Machine output must never carry ANSI codes (SARIF upload, JSON/CI parsers).
+  if (argv.includes("--json") || argv.includes("--sarif")) setColorEnabled(false);
   const sub = argv[0];
   if (!sub || sub === "-h" || sub === "--help") {
     out(HELP + "\n");
