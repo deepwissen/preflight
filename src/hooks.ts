@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, basename, isAbsolute } from "node:path";
 import { scanCode, scanAgentConfigFile, type Finding } from "./scan.js";
 import { scanDangerous } from "./danger.js";
+import { toPosix } from "./paths.js";
 
 /** Dangerous-command scan for hook command/script text (keeps hook-* rule ids). */
 const dangerousFindings = (text: string, where: string): Finding[] => scanDangerous(text, where, "hook");
@@ -42,11 +43,13 @@ function pluginScript(cmd: string, pluginDir: string): ScriptRef | null {
  *  a single literal script-path token. Harmless if it mis-resolves — the caller only
  *  scans it when the file exists. */
 function settingsScript(cmd: string, baseDir: string, projectDir?: string): ScriptRef | null {
-  // Normalize so the real path falls out: drop quotes (`"$CLAUDE_PROJECT_DIR"/x`) and
-  // expand $CLAUDE_PROJECT_DIR / ${CLAUDE_PROJECT_DIR} to the project root.
-  let c = cmd.replace(/["']/g, "");
-  if (projectDir) c = c.replace(/\$\{?CLAUDE_PROJECT_DIR\}?/g, projectDir);
-  const m = /((?:\/|~\/|\.{0,2}\/)?[\w./-]+\.(sh|bash|zsh|py|js|cjs|mjs|ts|rb|pl|ps1))\b/i.exec(c);
+  // Normalize so the real path falls out: drop quotes (`"$CLAUDE_PROJECT_DIR"/x`),
+  // expand $CLAUDE_PROJECT_DIR / ${CLAUDE_PROJECT_DIR} to the project root, and fold any
+  // Windows backslashes to `/` so the path regex (and a `C:\…` project dir) parse.
+  let c = toPosix(cmd.replace(/["']/g, ""));
+  if (projectDir) c = toPosix(c.replace(/\$\{?CLAUDE_PROJECT_DIR\}?/g, toPosix(projectDir)));
+  // Optional `C:` drive prefix so a Windows absolute path isn't truncated to `/Users/…`.
+  const m = /((?:[A-Za-z]:)?(?:\/|~\/|\.{0,2}\/)?[\w./-]+\.(sh|bash|zsh|py|js|cjs|mjs|ts|rb|pl|ps1))\b/i.exec(c);
   if (!m) return null;
   const rel = m[1];
   let abs: string;
