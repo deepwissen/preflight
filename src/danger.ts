@@ -15,6 +15,20 @@ import type { Finding } from "./scan.js";
 const FETCH_EXECUTE = /\b(?:curl|wget|fetch)\b[^|&;]*\|\s*(?:sh|bash|zsh|python3?|node|deno)\b|\beval\b[^;]*\$\((?:curl|wget)\b/i;
 const OBFUSCATED_EXEC = /\bbase64\s+(?:-d|--decode|-D)\b[^|]*\|\s*(?:sh|bash|zsh|python3?|node)\b/i;
 const DESTRUCTIVE = /\brm\s+-[rf]{1,2}\s+(?:\/(?!tmp\b)|~\/|\$HOME\b)/i;
+// Download-to-file, make executable, and run it — the two-step form FETCH_EXECUTE's
+// pipe check misses (`curl … -o /tmp/b && chmod +x /tmp/b && /tmp/b`). Needs BOTH a
+// download-to-file and a chmod +x so a plain `curl -o file` download stays clean.
+const DOWNLOAD_RUN = (t: string): boolean =>
+  /\b(?:curl|wget)\b[^\n]*\s-[oO]\b/i.test(t) && /\bchmod\s+(?:\+x|[0-7]*[1357][0-7]?)\b/i.test(t);
+// Fetch-and-eval inside a language runtime (no shell pipe): python `exec(urlopen(…))`,
+// `eval(requests.get(…).text)`, etc.
+const LANG_FETCH_EXEC = /\b(?:exec|eval)\s*\([^\n]*\b(?:urlopen|urllib|requests\.(?:get|post))\b/i;
+// PowerShell download-and-run: iex / Invoke-Expression of iwr / Invoke-WebRequest /
+// DownloadString / Net.WebClient.
+const PS_FETCH_EXEC =
+  /\b(?:iex|invoke-expression)\b[^\n]*\b(?:iwr|invoke-webrequest|downloadstring|net\.webclient|curl|wget)\b/i;
+// Environment dump piped straight to the network (`env | curl -d @-`) — exfiltration.
+const ENV_EXFIL = /\b(?:env|printenv)\b\s*\|\s*(?:curl|wget|nc|ncat)\b/i;
 
 // Reverse shells. Strong single-signal forms (bash /dev/tcp, netcat -e) are
 // unambiguous. The python form needs a socket connection AND a shell handoff in the
@@ -33,7 +47,7 @@ function hasReverseShell(text: string): boolean {
 // resolve to .aws/credentials or .ssh/id_*. Comment-only mentions and ordinary TLS
 // (.pem) are ignored.
 const CRED_PATH =
-  /\.aws\/credentials|\.ssh\/(?:id_\w+|authorized_keys)|\bid_rsa\b|\bid_ed25519\b|\bcredentials\.json\b/i;
+  /\.aws\/credentials|\.ssh\/(?:id_\w+|authorized_keys)|\bid_rsa\b|\bid_ed25519\b|\bcredentials\.json\b|\.netrc\b|gh\/hosts\.ya?ml|\.config\/gh\b/i;
 const READ_SEND =
   /\b(?:cat|less|more|head|tail|cp|mv|scp|rsync|curl|wget|nc|ncat|base64|xxd|openssl|tar|zip|dd|open|read|readFile|readFileSync|ReadAllText|Get-Content|urlopen|fetch|send|post)\b|requests\.(?:get|post|put)/i;
 const COMMENT_LINE = /^\s*(?:#|\/\/|\/\*|\*|<!--|;|--)/;
@@ -63,6 +77,14 @@ export function scanDangerous(text: string, where: string, prefix: string): Find
   const hits: Hit[] = [];
   if (FETCH_EXECUTE.test(text))
     hits.push({ kind: "fetch-execute", severity: "error", what: "fetches a remote script and pipes it to a shell (remote code execution)" });
+  if (DOWNLOAD_RUN(text))
+    hits.push({ kind: "download-run", severity: "error", what: "downloads a remote file, marks it executable, and runs it (remote code execution)" });
+  if (LANG_FETCH_EXEC.test(text))
+    hits.push({ kind: "remote-eval", severity: "error", what: "fetches remote code and exec/evals it in-process (remote code execution)" });
+  if (PS_FETCH_EXEC.test(text))
+    hits.push({ kind: "ps-fetch-execute", severity: "error", what: "PowerShell downloads and executes remote code (iex/iwr) (remote code execution)" });
+  if (ENV_EXFIL.test(text))
+    hits.push({ kind: "env-exfil", severity: "error", what: "pipes the environment (secrets) to a remote host (exfiltration)" });
   if (OBFUSCATED_EXEC.test(text))
     hits.push({ kind: "obfuscated-exec", severity: "error", what: "decodes base64 and pipes it to a shell (obfuscated execution)" });
   if (hasReverseShell(text))

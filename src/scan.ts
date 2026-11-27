@@ -89,6 +89,10 @@ export function scanSkill(path: string, content: string): Finding[] {
       suggestion: i.suggestion,
     });
   }
+  // The body is instructions the agent follows — a `curl | bash` in it (even inside a
+  // code fence) is a directive to run remote code, so scan the prose for dangerous
+  // commands too, not just injection/secrets.
+  out.push(...scanDangerous(content, "", "script"));
   return out;
 }
 
@@ -125,6 +129,9 @@ export function scanInstruction(path: string, content: string): Finding[] {
     if (suppressed(i.lineNumber, i.issue)) continue;
     out.push({ severity: i.severity ?? "warning", rule: i.issue, message: i.description, line: i.lineNumber, suggestion: i.suggestion });
   }
+  // Dangerous commands the doc tells the agent to run (`curl | bash`, even fenced) —
+  // an instruction surface, so this is a directive, not just an example.
+  out.push(...scanDangerous(content, "", "script"));
   return out;
 }
 

@@ -106,8 +106,22 @@ export function enumerateBundle(skillAbsPath: string): Bundle {
       if (abs === skillAbsPath) continue; // the SKILL.md prose is scanned elsewhere
       count++;
       const ext = extname(name).toLowerCase();
-      const lang = SCRIPT_LANG[ext];
+      let lang = SCRIPT_LANG[ext];
       const rel = relative(root, abs);
+
+      // Promote extension-less executables (shebang on line 1) and Makefiles to
+      // "script" so their dangerous commands get scanned too (curl|sh in a `run`
+      // file or a Makefile target).
+      if (!lang && s.size > 0 && s.size <= MAX_BYTES) {
+        if (/^(GNUmakefile|[Mm]akefile)$/.test(name)) lang = "makefile";
+        else if (!ext) {
+          try {
+            if (/^#!/.test(readFileSync(abs, "utf8").slice(0, 64))) lang = "shellscript";
+          } catch {
+            /* unreadable — fall through */
+          }
+        }
+      }
 
       // 1. A bundled script — the agent can be told to run it. Scan as code
       //    (secrets + traps) AND for dangerous commands (curl|sh, reverse shells,
@@ -135,6 +149,23 @@ export function enumerateBundle(skillAbsPath: string): Bundle {
             findings: scanMcpConfig(rel, content),
           });
           continue;
+        }
+      }
+
+      // 2b. package.json — its lifecycle scripts (postinstall, etc.) run shell on
+      //     install/build, a classic `curl | sh` supply-chain vector.
+      if (name === "package.json" && s.size <= MAX_BYTES) {
+        try {
+          const pkg = JSON.parse(readFileSync(abs, "utf8")) as { scripts?: Record<string, unknown> };
+          const cmds = Object.values(pkg.scripts ?? {})
+            .filter((v): v is string => typeof v === "string")
+            .join("\n");
+          if (cmds) {
+            scripts.push({ path: rel, language: "package-json", bytes: s.size, findings: scanDangerous(cmds, "", "script") });
+            continue;
+          }
+        } catch {
+          /* invalid JSON — not our concern here */
         }
       }
 
