@@ -53,7 +53,7 @@ const EMPTY: Bundle = { scripts: [], otherFiles: 0 };
  * commands/agents have no bundle. Each script found is scanned for secrets/traps.
  */
 export function enumerateBundle(skillAbsPath: string): Bundle {
-  if (!/(^|\/)skill\.md$/i.test(skillAbsPath)) return EMPTY;
+  if (!/(^|[\\/])skill\.md$/i.test(skillAbsPath)) return EMPTY;
   const root = dirname(skillAbsPath);
   const scripts: BundledScript[] = [];
   let otherFiles = 0;

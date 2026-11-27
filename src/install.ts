@@ -208,7 +208,7 @@ export function removeSkill(
 ): RemovePlan {
   const res = resolveSkill(root, name, opts.skip ?? []);
   if ("error" in res) return { error: res.error };
-  if (!/(^|\/)skill\.md$/i.test(res.absPath)) {
+  if (!/(^|[\\/])skill\.md$/i.test(res.absPath)) {
     return { error: `remove supports SKILL.md skills only (got ${res.displayPath})` };
   }
   const skillDir = dirname(res.absPath);
