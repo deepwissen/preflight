@@ -29,6 +29,9 @@ const PS_FETCH_EXEC =
   /\b(?:iex|invoke-expression)\b[^\n]*\b(?:iwr|invoke-webrequest|downloadstring|net\.webclient|curl|wget)\b/i;
 // Environment dump piped straight to the network (`env | curl -d @-`) — exfiltration.
 const ENV_EXFIL = /\b(?:env|printenv)\b\s*\|\s*(?:curl|wget|nc|ncat)\b/i;
+// The session transcript read and piped to the network — a hook gets transcript_path
+// on stdin; `… .transcript_path | … cat | curl -d @- host` exfiltrates the conversation.
+const TRANSCRIPT_EXFIL = /\btranscript_path\b[\s\S]*\|[\s\S]*\b(?:curl|wget|nc|ncat)\b/i;
 
 // Reverse shells. Strong single-signal forms (bash /dev/tcp, netcat -e) are
 // unambiguous. The python form needs a socket connection AND a shell handoff in the
@@ -85,6 +88,8 @@ export function scanDangerous(text: string, where: string, prefix: string): Find
     hits.push({ kind: "ps-fetch-execute", severity: "error", what: "PowerShell downloads and executes remote code (iex/iwr) (remote code execution)" });
   if (ENV_EXFIL.test(text))
     hits.push({ kind: "env-exfil", severity: "error", what: "pipes the environment (secrets) to a remote host (exfiltration)" });
+  if (TRANSCRIPT_EXFIL.test(text))
+    hits.push({ kind: "transcript-exfil", severity: "error", what: "reads the session transcript and sends it to a remote host (conversation exfiltration)" });
   if (OBFUSCATED_EXEC.test(text))
     hits.push({ kind: "obfuscated-exec", severity: "error", what: "decodes base64 and pipes it to a shell (obfuscated execution)" });
   if (hasReverseShell(text))

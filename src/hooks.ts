@@ -42,17 +42,22 @@ function pluginScript(cmd: string, pluginDir: string): ScriptRef | null {
  *  a single literal script-path token. Harmless if it mis-resolves — the caller only
  *  scans it when the file exists. */
 function settingsScript(cmd: string, baseDir: string, projectDir?: string): ScriptRef | null {
-  const m = /(\$\{?CLAUDE_PROJECT_DIR\}?\/)?((?:\.?\.?\/)?[\w./-]+\.(sh|bash|zsh|py|js|cjs|mjs|ts|rb|pl|ps1))\b/i.exec(cmd);
+  // Normalize so the real path falls out: drop quotes (`"$CLAUDE_PROJECT_DIR"/x`) and
+  // expand $CLAUDE_PROJECT_DIR / ${CLAUDE_PROJECT_DIR} to the project root.
+  let c = cmd.replace(/["']/g, "");
+  if (projectDir) c = c.replace(/\$\{?CLAUDE_PROJECT_DIR\}?/g, projectDir);
+  const m = /((?:\/|~\/|\.{0,2}\/)?[\w./-]+\.(sh|bash|zsh|py|js|cjs|mjs|ts|rb|pl|ps1))\b/i.exec(c);
   if (!m) return null;
-  const usedProjectDir = Boolean(m[1]);
-  const rel = m[2];
+  const rel = m[1];
   let abs: string;
   if (isAbsolute(rel)) abs = rel;
-  else if (usedProjectDir) {
-    if (!projectDir) return null; // $CLAUDE_PROJECT_DIR unknown (e.g. user-level settings)
-    abs = join(projectDir, rel);
-  } else abs = join(baseDir, rel);
-  return { abs, rel, lang: EXT_LANG[m[3].toLowerCase()] ?? "shellscript" };
+  else {
+    // A relative hook path runs from the project root (Claude's cwd); fall back to the
+    // settings dir. Prefer whichever actually exists.
+    const fromProject = projectDir ? join(projectDir, rel) : undefined;
+    abs = fromProject && existsSync(fromProject) ? fromProject : join(baseDir, rel);
+  }
+  return { abs, rel, lang: EXT_LANG[m[2].toLowerCase()] ?? "shellscript" };
 }
 
 function unparseable(label: string): Finding {
@@ -117,6 +122,17 @@ function walkHooks(root: Record<string, unknown>, resolve: ScriptResolver): Find
         const cmdText = hookCommandText(h);
         if (!cmdText) continue; // non-shell hook type (prompt/agent/mcp_tool) — nothing to scan
         findings.push(...dangerousFindings(cmdText, `hook ${tag} command`));
+
+        // A PreToolUse hook that returns permissionDecision:"allow" silently auto-approves
+        // tool calls — with matcher "*" it green-lights every tool, defeating the prompt.
+        if (/permissionDecision"?\s*:\s*"allow"|"?decision"?\s*:\s*"approve"/i.test(cmdText)) {
+          findings.push({
+            severity: "warning",
+            rule: "hook-auto-approve",
+            message: `hook ${tag} auto-approves tool calls (permissionDecision "allow")${m?.matcher === "*" ? " for ALL tools (matcher *)" : ""}`,
+            suggestion: "this bypasses the permission prompt on those tools — remove it unless blanket auto-approval is intended",
+          });
+        }
 
         const sc = resolve(cmdText);
         if (sc && !scannedScripts.has(sc.abs) && existsSync(sc.abs)) {
