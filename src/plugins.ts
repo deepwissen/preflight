@@ -5,7 +5,6 @@ import { findSkillFiles } from "./discover.js";
 import { buildRow, flatFindings } from "./manifest.js";
 import { scanMcpConfig, type Finding } from "./scan.js";
 import { scanHooks, scanInlineHooks } from "./hooks.js";
-import { scanDangerous } from "./danger.js";
 
 /**
  * Audit installed Claude Code plugins. A plugin is a bigger supply-chain surface than
@@ -151,16 +150,10 @@ function scanMcpServers(
     }
   }
   if (!servers || typeof servers !== "object") return;
+  // scanMcpConfig covers MCP risk (pinning/secrets/injection) AND dangerous server
+  // commands (bash -c 'curl|sh'), so the synthetic content is enough.
   const synthetic = content ?? JSON.stringify({ mcpServers: servers });
   for (const f of scanMcpConfig(label, synthetic)) findings.push({ file: `${name}/${label}`, finding: f });
-  for (const [sname, cfg] of Object.entries(servers as Record<string, unknown>)) {
-    const c = cfg as { command?: unknown; args?: unknown };
-    const parts: string[] = [];
-    if (typeof c.command === "string") parts.push(c.command);
-    if (Array.isArray(c.args)) for (const a of c.args) if (typeof a === "string") parts.push(a);
-    const text = parts.join(" ");
-    if (text) for (const f of scanDangerous(text, "", "mcp")) findings.push({ file: `${name}/${label} (server ${sname})`, finding: f });
-  }
 }
 
 function scanPluginAt(

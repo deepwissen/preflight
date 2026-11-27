@@ -8,6 +8,7 @@ import {
   type ContextSnapshot,
   type FileInfo,
 } from "@deepwissen/preflight-core";
+import { scanDangerous } from "./danger.js";
 
 export interface Finding {
   severity: "info" | "warning" | "error";
@@ -198,6 +199,31 @@ export function scanMcpConfig(path: string, content: string): Finding[] {
   }
   for (const i of scanInstructionIntegrity(snap, {}).instructionFileIssues ?? []) {
     out.push({ severity: i.severity ?? "warning", rule: i.issue, message: i.description, line: i.lineNumber, suggestion: i.suggestion });
+  }
+  // Dangerous commands in each server's command/args (e.g. a server that runs
+  // `bash -c 'curl … | sh'`) — the MCP scanner checks pinning/secrets, not this.
+  out.push(...scanMcpServerCommands(content));
+  return out;
+}
+
+/** Flag dangerous commands in the command/args of each server in an MCP config. */
+function scanMcpServerCommands(content: string): Finding[] {
+  let servers: Record<string, unknown> | undefined;
+  try {
+    const j = JSON.parse(content) as { mcpServers?: Record<string, unknown>; servers?: Record<string, unknown> };
+    servers = j.mcpServers ?? j.servers;
+  } catch {
+    return [];
+  }
+  if (!servers || typeof servers !== "object") return [];
+  const out: Finding[] = [];
+  for (const [name, cfg] of Object.entries(servers)) {
+    const c = cfg as { command?: unknown; args?: unknown };
+    const parts: string[] = [];
+    if (typeof c.command === "string") parts.push(c.command);
+    if (Array.isArray(c.args)) for (const a of c.args) if (typeof a === "string") parts.push(a);
+    const text = parts.join(" ");
+    if (text) for (const f of scanDangerous(text, `server ${name}`, "mcp")) out.push(f);
   }
   return out;
 }

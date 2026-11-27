@@ -7,6 +7,7 @@ import {
   buildScopes,
   buildRow,
   exitForReport,
+  failThreshold,
   type FailOn,
   type ManifestReport,
 } from "./manifest.js";
@@ -28,8 +29,8 @@ import {
   renderPickList,
   renderPlugins,
 } from "./render.js";
-import { renderManifestSarif } from "./sarif.js";
-import { discoverPlugins } from "./plugins.js";
+import { renderManifestSarif, renderPluginsSarif } from "./sarif.js";
+import { discoverPlugins, type PluginInfo } from "./plugins.js";
 import {
   stageSource,
   planInstall,
@@ -475,15 +476,32 @@ function runRemove(argv: string[], out: (s: string) => void, err: (s: string) =>
 function runPlugins(argv: string[], out: (s: string) => void, err: (s: string) => void): number {
   let values: Record<string, unknown>;
   try {
-    values = parseArgs({ args: argv, allowPositionals: false, options: { json: { type: "boolean" } } }).values;
+    values = parseArgs({
+      args: argv,
+      allowPositionals: false,
+      options: { json: { type: "boolean" }, sarif: { type: "boolean" }, "fail-on": { type: "string", default: "error" } },
+    }).values;
   } catch (e) {
     err(`preflight: ${(e as Error).message}\n`);
     return 2;
   }
+  const failOn = String(values["fail-on"]);
+  if (!FAIL_ON.includes(failOn)) {
+    err(`preflight: --fail-on must be one of ${FAIL_ON.join(", ")}\n`);
+    return 2;
+  }
   const plugins = discoverPlugins();
-  out((values.json ? JSON.stringify({ plugins }, null, 2) : renderPlugins(plugins)) + "\n");
-  // Advisory audit: exit 1 if any plugin has an error-level finding.
-  return plugins.some((p) => p.errorCount > 0) ? 1 : 0;
+  out(
+    (values.sarif
+      ? renderPluginsSarif(plugins)
+      : values.json
+        ? JSON.stringify({ plugins }, null, 2)
+        : renderPlugins(plugins)) + "\n"
+  );
+  // Exit non-zero when a plugin finding meets the --fail-on threshold.
+  const threshold = failThreshold(failOn as FailOn);
+  const rank = (p: PluginInfo): number => (p.errorCount ? 3 : p.warnCount ? 2 : p.findings.length ? 1 : 0);
+  return plugins.some((p) => rank(p) >= threshold) ? 1 : 0;
 }
 
 export async function run(

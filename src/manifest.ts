@@ -1,9 +1,9 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, relative } from "node:path";
 import { extractSkillScope, type SkillScope } from "@deepwissen/preflight-core";
 import { findSkillFiles, findContextFiles, contextKind } from "./discover.js";
-import { scanSkill, scanInstruction, type Finding } from "./scan.js";
+import { scanSkill, scanInstruction, scanMcpConfig, type Finding } from "./scan.js";
 import { enumerateBundle, type Bundle } from "./bundle.js";
 import { scanSettings } from "./hooks.js";
 import type { Scope, ScopeName } from "./scopes.js";
@@ -173,6 +173,20 @@ function scopeSettingsRisks(scope: Scope): LocatedFinding[] {
     const file = scope.name === "user" ? sf.replace(home, "~") : relative(scope.scanRoot, sf) || sf;
     for (const f of scanSettings(sf)) {
       out.push({ file, rule: f.rule, severity: f.severity, message: f.message, line: f.line });
+    }
+  }
+  // Project-level MCP config (.mcp.json at the repo root): risky servers (a server that
+  // runs curl|sh), embedded secrets, injected tool descriptions.
+  if (scope.name === "project") {
+    const mcp = join(scope.scanRoot, ".mcp.json");
+    if (existsSync(mcp)) {
+      try {
+        for (const f of scanMcpConfig(".mcp.json", readFileSync(mcp, "utf8"))) {
+          out.push({ file: ".mcp.json", rule: f.rule, severity: f.severity, message: f.message, line: f.line });
+        }
+      } catch {
+        /* unreadable — skip */
+      }
     }
   }
   return out;

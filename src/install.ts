@@ -17,6 +17,7 @@ import { buildRow, type SkillRow } from "./manifest.js";
 /** A git ref (owner/repo or a git URL) rather than an existing local path. */
 export function isGitRef(src: string): boolean {
   if (existsSync(resolve(src))) return false; // a real local path always wins
+  if (/^(\.\.?[/\\]|[/\\]|~)/.test(src)) return false; // explicit local path (./ ../ / ~), even if missing
   return /^(https?:\/\/|git@)/.test(src) || /^[\w.-]+\/[\w.-]+$/.test(src);
 }
 
