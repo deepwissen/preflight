@@ -107,8 +107,9 @@ function unparseable(label: string): Finding {
   };
 }
 
-// Events that fire before the workspace-trust prompt, or on every message — a
-// cloned repo's hook on these runs before you get a chance to approve it.
+// Events that auto-run with no per-action approval: SessionStart/Setup at session
+// start, UserPromptSubmit/UserPromptExpansion on every prompt. Once you trust the
+// repo these fire automatically, so their command is worth reviewing before you do.
 const SENSITIVE_EVENTS = new Set(["SessionStart", "Setup", "UserPromptSubmit", "UserPromptExpansion"]);
 
 type HookEntry = { type?: string; command?: unknown; args?: unknown; url?: unknown };
@@ -190,8 +191,8 @@ function walkHooks(root: Record<string, unknown>, resolve: ScriptResolver): Find
     findings.push({
       severity: "warning",
       rule: "hook-sensitive-event",
-      message: `hooks run on ${[...sensitive].join(", ")} — these fire before the workspace-trust prompt or on every message`,
-      suggestion: "a cloned repo's hook on these events runs before you approve it — review the command above",
+      message: `hooks run on ${[...sensitive].join(", ")} — these auto-run at session start or on every prompt, with no per-action approval`,
+      suggestion: "once you trust this repo these run automatically on those events — review the command above before trusting the folder",
     });
   }
   return findings;

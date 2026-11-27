@@ -65,7 +65,7 @@ function scopesFromFlags(
   return [projectScope(projectRoot)];
 }
 
-const VERSION = "0.4.0"; // keep in sync with package.json
+const VERSION = "0.4.1"; // keep in sync with package.json
 
 /** Read one line from stdin (interactive skill selection). */
 function promptLine(question: string): Promise<string> {
@@ -141,6 +141,15 @@ Options:
   --yes              (remove) actually move the skill to trash
   -v, --version      Print version
   -h, --help         Print this help
+
+Exit codes:
+  0  ok — nothing met the --fail-on threshold
+  1  findings met the threshold (list / manifest / check / add gate)
+  2  usage error (bad flag, no such path, or 'check'/'remove' with no/unknown name)
+
+For CI, gate the whole project with \`manifest\` (scans everything); \`check\` is for one
+named skill and exits 2 without a name:
+  preflight manifest --fail-on warning
 
 A scan finds known-bad patterns but never certifies a skill "safe" — a clean result
 means nothing was *found*, not that nothing is there.
