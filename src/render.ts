@@ -37,8 +37,11 @@ export function renderPickList(items: InstallItem[], label: string): string {
   items.forEach((it, i) => {
     const r = it.row;
     const check = r.errorCount ? `✗ ${r.errorCount}` : r.warnCount ? `⚠ ${r.warnCount}` : "✓";
+    const checkSev = r.errorCount ? "error" : r.warnCount ? "warning" : "ok";
+    // Pad on the PLAIN text, then color — ANSI codes would otherwise inflate .length and
+    // break column alignment. This is the table where you scan 20 rows for the one ✗.
     L.push(
-      `  ${String(i + 1).padStart(3)}  ${pad(it.name, nameW)}  ${pad(r.scopeLabel, scopeW)}  ${pad(check, 5)} ${desc(r)}`
+      `  ${String(i + 1).padStart(3)}  ${bold(pad(it.name, nameW))}  ${pad(r.scopeLabel, scopeW)}  ${sev(checkSev, pad(check, 5))} ${desc(r)}`
     );
   });
   return L.join("\n");

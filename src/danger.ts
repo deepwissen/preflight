@@ -12,18 +12,20 @@ import type { Finding } from "./scan.js";
  */
 
 // Simple, unambiguous text-level patterns.
-const FETCH_EXECUTE = /\b(?:curl|wget|fetch)\b[^|&;]*\|\s*(?:sh|bash|zsh|python3?|node|deno)\b|\beval\b[^;]*\$\((?:curl|wget)\b/i;
+const FETCH_EXECUTE = /\b(?:curl|wget|fetch)\b[^|&;]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|python3?|node|deno)\b|\beval\b[^;]*\$\((?:curl|wget)\b/i;
 // Markdown variant: curl/wget WITH AN ARGUMENT piped to a shell. In a doc, only a bare
 // "never run `curl | sh`" (no argument) is advice; `curl host/x | sh`, `curl $URL | sh`,
 // `curl https://… | sh` are all commands. Covers prose, inline code, indented blocks,
 // HTML comments — anywhere a scheme-less host or a $VAR would otherwise slip through.
 const MD_FETCH_EXECUTE =
-  /\b(?:curl|wget|fetch)\b\s+[^\s|&;][^|&;\n]*\|\s*(?:sh|bash|zsh|python3?|node|deno)\b/i;
+  /\b(?:curl|wget|fetch)\b\s+[^\s|&;][^|&;\n]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|python3?|node|deno)\b/i;
 // Command-substitution run: a shell or eval executing the output of a fetch —
 // `bash -c "$(curl …)"` (how Homebrew installs), `eval "$(curl …)"`. No pipe, so
 // FETCH_EXECUTE misses it. Scoped to real shells + eval and the `$(curl|wget …)` form
 // only — NOT `node`/`fetch()` or backtick code spans, which collide with JS/markdown.
-const CMD_SUBST_RUN = /\b(?:sh|bash|zsh|ksh|dash|ash|eval)\b[^\n]*\$\(\s*(?:curl|wget)\b/i;
+// A shell/eval running a fetch via command substitution `$(curl …)` (bash -c "$(curl …)",
+// Homebrew) OR process substitution `<(curl …)` (bash <(curl …)).
+const CMD_SUBST_RUN = /\b(?:sh|bash|zsh|ksh|dash|ash|eval)\b[^\n]*(?:\$\(|<\()\s*(?:curl|wget)\b/i;
 const OBFUSCATED_EXEC = /\bbase64\s+(?:-d|--decode|-D)\b[^|]*\|\s*(?:sh|bash|zsh|python3?|node)\b/i;
 // A catastrophic delete target: the filesystem root, the home dir, a top-level system
 // dir, or a credential folder (~/.ssh, ~/.aws, ~/.gnupg). A specific project subfolder
