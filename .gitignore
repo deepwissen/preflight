@@ -3,3 +3,6 @@ dist/
 *.tgz
 *.log
 .DS_Store
+
+# QA harness output
+*.results.json

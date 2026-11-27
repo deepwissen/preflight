@@ -28,3 +28,20 @@ jobs:
         with:
           node-version: 22
       - run: node scripts/check-engine-floor.mjs
+
+  # Behavioral QA: the scenario suites (real attacks must stay flagged, benign skills
+  # must stay clean) AND the anthropics false-positive gate (Anthropic's own skills must
+  # install without --force). This is what stops a rule change from regressing in either
+  # direction. plugins.sh needs the `claude` CLI, so it's a local-only check.
+  qa:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "npm"
+      - run: npm ci
+      - run: npm run build
+      - run: npm run qa # skills.mjs + config.mjs scenario suites (exit non-zero on any fail)
+      - run: npm run qa:fp-gate # clones anthropics/skills @ pinned SHA, must scan clean
