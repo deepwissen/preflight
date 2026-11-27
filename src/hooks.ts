@@ -176,6 +176,25 @@ export function scanHooks(pluginDir: string): Finding[] {
   return walkHooks(root as Record<string, unknown>, (cmd) => pluginScript(cmd, pluginDir));
 }
 
+/** Hook-risk analysis for `plugin.json.hooks` — an inline hooks map OR a string path
+ *  to a hooks file relative to the plugin dir. (CC 2.1.332: plugins can declare hooks
+ *  inline in plugin.json, not just in hooks/hooks.json.) */
+export function scanInlineHooks(hooks: unknown, pluginDir: string): Finding[] {
+  let root: unknown = hooks;
+  if (typeof hooks === "string") {
+    const p = join(pluginDir, hooks);
+    if (!existsSync(p)) return [];
+    try {
+      const parsed = JSON.parse(readFileSync(p, "utf8"));
+      root = (parsed as { hooks?: unknown })?.hooks ?? parsed;
+    } catch {
+      return [unparseable(basename(p))];
+    }
+  }
+  if (!root || typeof root !== "object") return [];
+  return walkHooks(root as Record<string, unknown>, (cmd) => pluginScript(cmd, pluginDir));
+}
+
 // --- settings.json checks that remain in the tool ---
 //
 // Canonical config-key detection — apiKeyHelper, env *_BASE_URL redirect, defaultMode,

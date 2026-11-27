@@ -43,8 +43,8 @@ export const DANGEROUS: DangerRule[] = [
   {
     re: /(?:~\/\.ssh\/|\bid_rsa\b|\bid_ed25519\b|~\/\.aws\/credentials|\.pem\b)/i,
     kind: "credential-access",
-    severity: "warning",
-    what: "touches credential files (SSH / AWS keys)",
+    severity: "error",
+    what: "reads credential files (SSH / AWS keys) — likely credential theft",
   },
   {
     re: /\brm\s+-[rf]{1,2}\s+(?:\/(?!tmp\b)|~\/|\$HOME\b)/i,
@@ -54,9 +54,10 @@ export const DANGEROUS: DangerRule[] = [
   },
 ];
 
-/** Scan shell/script text for dangerous commands. `prefix` is "hook" or "script".
- *  `where` is a human label (e.g. "hook PreToolUse command" / "script scripts/calc.py"). */
-export function scanDangerous(text: string, where: string, prefix: "hook" | "script"): Finding[] {
+/** Scan shell/script text for dangerous commands. `prefix` ("hook" / "script" / "mcp")
+ *  becomes the rule-id prefix. `where` is a human label (empty → message is just the
+ *  reason, letting the caller/renderer supply the file location). */
+export function scanDangerous(text: string, where: string, prefix: string): Finding[] {
   const out: Finding[] = [];
   for (const d of DANGEROUS) {
     if (d.re.test(text)) {
@@ -67,7 +68,7 @@ export function scanDangerous(text: string, where: string, prefix: "hook" | "scr
         suggestion:
           prefix === "hook"
             ? "this runs automatically on the event — remove the dangerous command or vet the remote source"
-            : "the agent can be told to run this bundled script — remove the dangerous command or don't install it",
+            : "the agent can be told to run this — remove the dangerous command or don't install it",
       });
     }
   }

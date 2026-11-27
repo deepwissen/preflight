@@ -1,43 +1,54 @@
-import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { findSkillFiles } from "./discover.js";
 import { buildRow, flatFindings } from "./manifest.js";
 import { scanMcpConfig, type Finding } from "./scan.js";
-import { scanHooks } from "./hooks.js";
+import { scanHooks, scanInlineHooks } from "./hooks.js";
+import { scanDangerous } from "./danger.js";
 
 /**
- * Audit installed Claude Code plugins (~/.claude/plugins). A plugin is a bigger
- * supply-chain surface than a standalone skill — it bundles skills + an MCP config
- * + hooks, from a third-party marketplace. Phase 1 scans the bundled SKILLS and
- * root .mcp.json (reusing our detectors) and surfaces provenance; it does NOT yet
- * scan hooks (the highest-privilege component) — see the honest caveat in the
- * output. Read-only: it audits what's installed, it never installs/removes.
+ * Audit installed Claude Code plugins. A plugin is a bigger supply-chain surface than
+ * a standalone skill — it bundles skills/commands/agents + an MCP config + hooks, from
+ * a third-party marketplace, and runs with your agent.
+ *
+ * Ground truth is ~/.claude/plugins/installed_plugins.json (CC 2.1.332, version 2):
+ * `plugins` is keyed "name@marketplace" → an array of install records, each with an
+ * `installPath` under cache/<marketplace>/<plugin>/<version>/. We scan each installPath
+ * (NOT the marketplaces/ catalog, which lists every available plugin), reusing our skill,
+ * MCP, hook and dangerous-command detectors, and also read plugin.json's inline hooks /
+ * mcpServers. Read-only: audits what's installed; never installs/removes.
  */
 
 export interface PluginInfo {
+  key: string; // name@marketplace
   name: string;
   marketplace: string;
-  source: string; // "github:owner/repo" | "unknown"
+  source: string; // "github:owner/repo" | "directory:/path" | "git:url" | "unknown"
+  version: string;
+  scopes: string[]; // user / project / local — every scope this installPath is recorded in
+  projectPaths: string[]; // for project-scope records
+  enabled: boolean; // from enabledPlugins in user/project settings
+  installPath: string;
   skills: number;
   commands: number;
+  agents: number;
   hasMcp: boolean;
-  hasHooks: boolean; // flagged but NOT yet scanned
+  hasHooks: boolean;
   findings: Array<{ file: string; finding: Finding }>;
   errorCount: number;
   warnCount: number;
 }
 
-function pluginsBase(): string {
-  return join(homedir(), ".claude", "plugins");
+interface InstallRecord {
+  scope?: string;
+  installPath?: string;
+  version?: string;
+  projectPath?: string;
 }
 
-function safeReaddir(dir: string): string[] {
-  try {
-    return readdirSync(dir);
-  } catch {
-    return [];
-  }
+function pluginsBase(): string {
+  return join(homedir(), ".claude", "plugins");
 }
 function isDir(p: string): boolean {
   try {
@@ -46,21 +57,50 @@ function isDir(p: string): boolean {
     return false;
   }
 }
-function isPluginDir(dir: string): boolean {
-  return existsSync(join(dir, "plugin.json")) || existsSync(join(dir, ".claude-plugin", "plugin.json"));
+function countMd(dir: string): number {
+  try {
+    return readdirSync(dir).filter((f) => /\.md$/i.test(f)).length;
+  } catch {
+    return 0;
+  }
+}
+function expandHome(p: string): string {
+  return p.replace(/^~(?=[/\\]|$)/, homedir());
+}
+function splitKey(key: string): [string, string] {
+  const i = key.lastIndexOf("@");
+  return i > 0 ? [key.slice(0, i), key.slice(i + 1)] : [key, ""];
 }
 
-/** marketplace name → source ("github:owner/repo"), from known_marketplaces.json. */
+function readInstalled(base: string): Record<string, InstallRecord[]> {
+  try {
+    const j = JSON.parse(readFileSync(join(base, "installed_plugins.json"), "utf8")) as {
+      plugins?: Record<string, InstallRecord[]>;
+    };
+    return j?.plugins ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/** marketplace name → readable source, from known_marketplaces.json. */
 function marketplaceSources(base: string): Record<string, string> {
   try {
     const km = JSON.parse(readFileSync(join(base, "known_marketplaces.json"), "utf8")) as Record<
       string,
-      { source?: { source?: string; repo?: string } }
+      { source?: { source?: string; repo?: string; path?: string; url?: string } }
     >;
     const out: Record<string, string> = {};
     for (const [name, v] of Object.entries(km)) {
       const s = v?.source;
-      out[name] = s?.source === "github" && s?.repo ? `github:${s.repo}` : (s?.source ?? "unknown");
+      out[name] =
+        s?.source === "github" && s?.repo
+          ? `github:${s.repo}`
+          : s?.source === "directory" && s?.path
+            ? `directory:${s.path}`
+            : s?.source === "git" && (s?.url || s?.repo)
+              ? `git:${s.url ?? s.repo}`
+              : (s?.source ?? "unknown");
     }
     return out;
   } catch {
@@ -68,65 +108,174 @@ function marketplaceSources(base: string): Record<string, string> {
   }
 }
 
-function countMd(dir: string): number {
-  return safeReaddir(dir).filter((f) => /\.md$/i.test(f)).length;
+function addEnabled(settingsPath: string, set: Set<string>): void {
+  try {
+    const ep = (JSON.parse(readFileSync(settingsPath, "utf8")) as { enabledPlugins?: Record<string, unknown> })
+      ?.enabledPlugins;
+    if (ep && typeof ep === "object") for (const [k, v] of Object.entries(ep)) if (v) set.add(k);
+  } catch {
+    /* no/invalid settings — nothing enabled from here */
+  }
 }
 
-function scanPlugin(dir: string, name: string, marketplace: string, source: string): PluginInfo {
+/** Keys enabled in user settings + any project settings referenced by install records. */
+function enabledKeys(records: Record<string, InstallRecord[]>): Set<string> {
+  const set = new Set<string>();
+  addEnabled(join(homedir(), ".claude", "settings.json"), set);
+  for (const recs of Object.values(records)) {
+    for (const r of recs) if (r.projectPath) addEnabled(join(r.projectPath, ".claude", "settings.json"), set);
+  }
+  return set;
+}
+
+/** Scan an mcpServers block (inline object, or a string path to a JSON file) for MCP
+ *  risk AND dangerous commands in each server's command/args. */
+function scanMcpServers(
+  mcpServers: unknown,
+  dir: string,
+  name: string,
+  label: string,
+  findings: PluginInfo["findings"]
+): void {
+  let servers: unknown = mcpServers;
+  let content: string | null = null;
+  if (typeof mcpServers === "string") {
+    const p = join(dir, mcpServers);
+    if (!existsSync(p)) return;
+    try {
+      content = readFileSync(p, "utf8");
+      const parsed = JSON.parse(content) as { mcpServers?: unknown };
+      servers = parsed?.mcpServers ?? parsed;
+    } catch {
+      return;
+    }
+  }
+  if (!servers || typeof servers !== "object") return;
+  const synthetic = content ?? JSON.stringify({ mcpServers: servers });
+  for (const f of scanMcpConfig(label, synthetic)) findings.push({ file: `${name}/${label}`, finding: f });
+  for (const [sname, cfg] of Object.entries(servers as Record<string, unknown>)) {
+    const c = cfg as { command?: unknown; args?: unknown };
+    const parts: string[] = [];
+    if (typeof c.command === "string") parts.push(c.command);
+    if (Array.isArray(c.args)) for (const a of c.args) if (typeof a === "string") parts.push(a);
+    const text = parts.join(" ");
+    if (text) for (const f of scanDangerous(text, "", "mcp")) findings.push({ file: `${name}/${label} (server ${sname})`, finding: f });
+  }
+}
+
+function scanPluginAt(
+  installPath: string,
+  key: string,
+  name: string,
+  marketplace: string,
+  source: string,
+  version: string,
+  scopes: string[],
+  projectPaths: string[],
+  enabled: boolean
+): PluginInfo {
   const findings: PluginInfo["findings"] = [];
 
   // Bundled skills (reuse buildRow — also scans each skill's own bundle).
-  const skillFiles = findSkillFiles(dir).filter((r) => /(^|\/)skill\.md$/i.test(r));
+  const skillFiles = findSkillFiles(installPath).filter((r) => /(^|\/)skill\.md$/i.test(r));
   for (const rel of skillFiles) {
-    const row = buildRow(join(dir, rel), rel);
+    const row = buildRow(join(installPath, rel), rel);
     for (const ff of flatFindings(row)) findings.push({ file: `${name}/${ff.file}`, finding: ff.finding });
   }
 
-  // The plugin's root MCP config.
-  const mcp = join(dir, ".mcp.json");
-  const hasMcp = existsSync(mcp);
-  if (hasMcp) {
-    for (const f of scanMcpConfig(".mcp.json", readFileSync(mcp, "utf8"))) {
-      findings.push({ file: `${name}/.mcp.json`, finding: f });
-    }
+  // Root .mcp.json.
+  const mcp = join(installPath, ".mcp.json");
+  const hasRootMcp = existsSync(mcp);
+  if (hasRootMcp) {
+    for (const f of scanMcpConfig(".mcp.json", readFileSync(mcp, "utf8"))) findings.push({ file: `${name}/.mcp.json`, finding: f });
   }
 
-  // Hooks — the highest-privilege component (run commands on events).
-  const hasHooks = existsSync(join(dir, "hooks", "hooks.json"));
-  for (const f of scanHooks(dir)) findings.push({ file: `${name}/hooks.json`, finding: f });
+  // Hooks from hooks/hooks.json.
+  const hasHooksFile = existsSync(join(installPath, "hooks", "hooks.json"));
+  for (const f of scanHooks(installPath)) findings.push({ file: `${name}/hooks.json`, finding: f });
+
+  // plugin.json may declare hooks / mcpServers inline (or point at a file).
+  let inlineHooks = false;
+  let inlineMcp = false;
+  for (const pj of [join(installPath, "plugin.json"), join(installPath, ".claude-plugin", "plugin.json")]) {
+    if (!existsSync(pj)) continue;
+    try {
+      const j = JSON.parse(readFileSync(pj, "utf8")) as { hooks?: unknown; mcpServers?: unknown };
+      if (j?.hooks) {
+        inlineHooks = true;
+        for (const f of scanInlineHooks(j.hooks, installPath)) findings.push({ file: `${name}/plugin.json (hooks)`, finding: f });
+      }
+      if (j?.mcpServers) {
+        inlineMcp = true;
+        scanMcpServers(j.mcpServers, installPath, name, "plugin.json (mcpServers)", findings);
+      }
+    } catch {
+      findings.push({
+        file: `${name}/plugin.json`,
+        finding: { severity: "warning", rule: "plugin-unparseable", message: "plugin.json is not valid JSON — can't fully audit it", suggestion: "fix the JSON" },
+      });
+    }
+    break;
+  }
 
   return {
+    key,
     name,
     marketplace,
     source,
+    version,
+    scopes,
+    projectPaths,
+    enabled,
+    installPath,
     skills: skillFiles.length,
-    commands: countMd(join(dir, "commands")),
-    hasMcp,
-    hasHooks,
+    commands: countMd(join(installPath, "commands")),
+    agents: countMd(join(installPath, "agents")),
+    hasMcp: hasRootMcp || inlineMcp,
+    hasHooks: hasHooksFile || inlineHooks,
     findings,
     errorCount: findings.filter((f) => f.finding.severity === "error").length,
     warnCount: findings.filter((f) => f.finding.severity === "warning").length,
   };
 }
 
-/** Discover + scan every installed plugin. Defensive: unknown layouts are skipped. */
+/** Discover + scan every installed plugin from installed_plugins.json. */
 export function discoverPlugins(): PluginInfo[] {
   const base = pluginsBase();
-  const marketplaces = join(base, "marketplaces");
-  if (!isDir(marketplaces)) return [];
+  const records = readInstalled(base);
   const sources = marketplaceSources(base);
+  const enabled = enabledKeys(records);
 
   const out: PluginInfo[] = [];
-  for (const m of safeReaddir(marketplaces)) {
-    const mdir = join(marketplaces, m);
-    if (!isDir(mdir)) continue;
-    const source = sources[m] ?? "unknown";
-    for (const sub of ["plugins", "external_plugins"]) {
-      const subdir = join(mdir, sub);
-      for (const p of safeReaddir(subdir)) {
-        const pdir = join(subdir, p);
-        if (isDir(pdir) && isPluginDir(pdir)) out.push(scanPlugin(pdir, p, m, source));
-      }
+  for (const [key, recs] of Object.entries(records)) {
+    if (!Array.isArray(recs) || recs.length === 0) continue;
+    const [name, marketplace] = splitKey(key);
+    // Dedupe by installPath (same path can appear as user + project), but keep all scopes.
+    const byPath = new Map<string, InstallRecord[]>();
+    for (const r of recs) {
+      const ip = expandHome(r.installPath ?? "");
+      if (!ip) continue;
+      const list = byPath.get(ip) ?? [];
+      list.push(r);
+      byPath.set(ip, list);
+    }
+    for (const [installPath, group] of byPath) {
+      if (!isDir(installPath)) continue; // stale / missing on disk
+      const scopes = [...new Set(group.map((r) => r.scope).filter(Boolean))] as string[];
+      const projectPaths = [...new Set(group.map((r) => r.projectPath).filter(Boolean))] as string[];
+      out.push(
+        scanPluginAt(
+          installPath,
+          key,
+          name,
+          marketplace,
+          sources[marketplace] ?? "unknown",
+          group[0].version ?? "",
+          scopes,
+          projectPaths,
+          enabled.has(key)
+        )
+      );
     }
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
