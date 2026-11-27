@@ -459,6 +459,16 @@ export function renderJson(report: ManifestReport): string {
         findings: r.findings,
         bundle: r.bundle,
       })),
+      // config/hook/MCP findings (settings.json, .mcp.json) and always-on context
+      // (CLAUDE.md, rules) — the same findings SARIF and the exit code include. These
+      // were missing, so a JSON consumer saw a clean project with e.g. a curl|sh hook.
+      config: report.settingsRisks,
+      context: report.contextFiles.map((c) => ({
+        path: c.path,
+        kind: c.kind,
+        alwaysTokens: c.alwaysTokens,
+        findings: c.findings,
+      })),
     },
     null,
     2
