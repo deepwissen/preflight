@@ -90,6 +90,24 @@ describe("enumerateBundle", () => {
     const b = enumerateBundle(cmd);
     expect(b.scripts).toEqual([]);
   });
+
+  it("scans secret-bearing data files that aren't scripts (.env, key.pem)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pf-secretfile-"));
+    const sk = join(dir, ".claude", "skills", "leaky");
+    mkdirSync(sk, { recursive: true });
+    writeFileSync(join(sk, "SKILL.md"), "---\nname: leaky\ndescription: x\n---\nLoad .env and key.pem.\n");
+    writeFileSync(join(sk, ".env"), "GITHUB_TOKEN=ghp_R4nd0mT0k3nV4lu3AbCdEfGhIjKlMnOpQr12\n");
+    writeFileSync(
+      join(sk, "key.pem"),
+      "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAA\n-----END OPENSSH PRIVATE KEY-----\n"
+    );
+    const b = enumerateBundle(join(sk, "SKILL.md"));
+    const env = b.scripts.find((s) => s.path === ".env");
+    const pem = b.scripts.find((s) => s.path === "key.pem");
+    expect(env?.findings.length).toBeGreaterThan(0);
+    expect(pem?.findings.length).toBeGreaterThan(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe("buildRow + render with a bundle", () => {

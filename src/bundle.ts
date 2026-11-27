@@ -22,6 +22,12 @@ const SCRIPT_LANG: Record<string, string> = {
 const MAX_BYTES = 256 * 1024; // don't read very large files into memory
 const MAX_FILES = 200; // bound the walk
 
+// Data files that carry no "code" but are the single most likely place a real
+// credential ships with a skill: dotenv, private keys/certs, cloud + VCS creds.
+// Scanned for secrets even though they aren't scripts.
+const SECRET_FILE =
+  /(^|\/)\.env(\.[\w.-]+)?$|(^|\/)\.netrc$|(^|\/)\.pgpass$|(^|\/)credentials$|\.(pem|key|pfx|p12|ppk|asc)$|(^|\/)(id_rsa|id_ed25519|id_ecdsa|id_dsa)$|(^|\/)hosts\.ya?ml$/i;
+
 export interface BundledScript {
   path: string; // relative to the skill directory
   language: string;
@@ -145,7 +151,20 @@ export function enumerateBundle(skillAbsPath: string): Bundle {
         continue;
       }
 
-      // 4. Everything else — ships with the skill but isn't code/prose we scan.
+      // 4. A bundled secret-bearing data file (.env, key.pem, .netrc, …) — not a
+      //    script, but the likeliest place a real credential ships. Scan for secrets.
+      if (SECRET_FILE.test(rel) && s.size <= MAX_BYTES) {
+        const content = readFileSync(abs, "utf8");
+        scripts.push({
+          path: rel,
+          language: "data",
+          bytes: s.size,
+          findings: scanCode(rel, content, ext.slice(1) || "plaintext"),
+        });
+        continue;
+      }
+
+      // 5. Everything else — ships with the skill but isn't code/prose we scan.
       otherFiles++;
     }
   };
