@@ -215,6 +215,72 @@ function scanEnvSecrets(env: unknown): Finding[] {
   return scanCode("settings.env", envText, "shellscript").map((f) => ({ ...f, message: `env block: ${f.message}` }));
 }
 
+const LOOPBACK = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(?:[:/]|$)/i;
+
+/** Risky env vars Claude Code exports into every tool/subprocess it runs. */
+function scanEnvRisks(env: unknown): Finding[] {
+  if (!env || typeof env !== "object") return [];
+  const e = env as Record<string, unknown>;
+  const str = (k: string): string | undefined => (typeof e[k] === "string" ? (e[k] as string) : undefined);
+  const out: Finding[] = [];
+
+  for (const k of ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"]) {
+    const v = str(k);
+    if (v && v.trim() && !LOOPBACK.test(v.trim())) {
+      out.push({
+        severity: "warning",
+        rule: "settings-env-proxy",
+        message: `env: ${k}=${v} routes all HTTP(S) traffic through a remote proxy — it can intercept or exfiltrate requests`,
+        suggestion: "remove it unless you control this proxy (a loopback address is fine)",
+      });
+      break; // one finding is enough
+    }
+  }
+  const nodeOpts = str("NODE_OPTIONS");
+  if (nodeOpts && /(?:^|\s)--(require|import|loader|experimental-loader)\b/.test(nodeOpts)) {
+    out.push({
+      severity: "error",
+      rule: "settings-env-node-options",
+      message: `env: NODE_OPTIONS="${nodeOpts}" injects code into every Node process it spawns (--require/--import)`,
+      suggestion: "remove the --require/--import/--loader directive",
+    });
+  }
+  if (/^(0|false)$/i.test((str("NODE_TLS_REJECT_UNAUTHORIZED") ?? "").trim())) {
+    out.push({
+      severity: "warning",
+      rule: "settings-env-tls-off",
+      message: "env: NODE_TLS_REJECT_UNAUTHORIZED=0 disables TLS certificate verification (man-in-the-middle risk)",
+      suggestion: "remove it — don't disable certificate checking globally",
+    });
+  }
+  return out;
+}
+
+/** Settings keys whose value is a shell command Claude Code runs automatically
+ *  (statusLine refresh, AWS auth refresh, OTEL header helper). apiKeyHelper is already
+ *  covered by the engine. Baseline warning for running a command; escalates to error
+ *  if the command itself is dangerous (curl|sh, etc.). */
+function scanCommandKeys(s: Record<string, unknown>): Finding[] {
+  const sl = s.statusLine && typeof s.statusLine === "object" ? (s.statusLine as Record<string, unknown>).command : undefined;
+  const keys: Array<[string, unknown]> = [
+    ["statusLine.command", sl],
+    ["awsAuthRefresh", s.awsAuthRefresh],
+    ["otelHeadersHelper", s.otelHeadersHelper],
+  ];
+  const out: Finding[] = [];
+  for (const [key, cmd] of keys) {
+    if (typeof cmd !== "string" || !cmd.trim()) continue;
+    out.push({
+      severity: "warning",
+      rule: "settings-command-key",
+      message: `${key} runs a shell command automatically: ${cmd.length > 80 ? cmd.slice(0, 79) + "…" : cmd}`,
+      suggestion: "this executes without the model's involvement — vet it",
+    });
+    out.push(...scanDangerous(cmd, key, "settings"));
+  }
+  return out;
+}
+
 /** Transparency: which plugins auto-load (info — below the engine's error/warning floor). */
 function scanEnabledPlugins(s: Record<string, unknown>): Finding[] {
   const plugins = s.enabledPlugins;
@@ -270,6 +336,8 @@ export function scanSettings(settingsPath: string): Finding[] {
     findings.push(...walkHooks(s.hooks as Record<string, unknown>, (cmd) => settingsScript(cmd, base, projectDir)));
   }
   findings.push(...scanEnvSecrets(s.env));
+  findings.push(...scanEnvRisks(s.env));
+  findings.push(...scanCommandKeys(s));
   findings.push(...scanEnabledPlugins(s));
   return findings;
 }
