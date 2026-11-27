@@ -67,7 +67,19 @@ function scopesFromFlags(
   return [projectScope(projectRoot)];
 }
 
-const VERSION = "0.5.0"; // keep in sync with package.json
+/** This package's own version, read from its package.json (dist/cli.js → ../package.json)
+ *  so `--version` can never drift from what npm published. */
+function selfVersion(): string {
+  try {
+    const pkg = join(dirname(fileURLToPath(import.meta.url)), "..", "package.json");
+    const v = JSON.parse(readFileSync(pkg, "utf8")).version;
+    if (typeof v === "string") return v;
+  } catch {
+    /* fall through */
+  }
+  return "0.0.0";
+}
+const VERSION = selfVersion();
 
 /** Read one line from stdin (interactive skill selection). */
 function promptLine(question: string): Promise<string> {
