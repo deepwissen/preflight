@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseSelection, selectByNames, nameCollisions, planInstall, installItem } from "../src/install.js";
+import { renderPickList } from "../src/render.js";
 
 describe("parseSelection", () => {
   it("parses numbers, ranges, all, none", () => {
@@ -43,6 +44,20 @@ describe("selectByNames + subset install", () => {
     const r = selectByNames(items, ["beta", "nope"]);
     expect(r.selected.map((i) => i.name)).toEqual(["beta"]);
     expect(r.notFound).toEqual(["nope"]);
+  });
+
+  it("pick list shows a description column so users can choose by what a skill does", () => {
+    const d = join(work, "described");
+    mkdirSync(d, { recursive: true });
+    writeFileSync(
+      join(d, "SKILL.md"),
+      "---\nname: described\ndescription: Summarize a PR and suggest follow-up tests\nallowed-tools: Read\n---\nGo.\n"
+    );
+    const items = planInstall(work, join(proj, ".claude", "skills"));
+    const view = renderPickList(items, work);
+    expect(view).toContain("WHAT IT DOES"); // the column header
+    expect(view).toContain("Summarize a PR and suggest follow-up tests"); // the description
+    expect(view).toContain("(no description)"); // skills without one are labeled, not blank
   });
 
   it("detects same-name shadowing (dupe install folder) — collisions + ambiguous selection", () => {

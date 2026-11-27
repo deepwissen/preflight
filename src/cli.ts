@@ -165,9 +165,9 @@ Options:
   -h, --help         Print this help
 
 Exit codes:
-  0  ok — nothing met the --fail-on threshold
+  0  ok — nothing met the threshold (incl. a dry-run / remove-preview that found nothing to gate)
   1  findings met the threshold (list / manifest / check / add gate)
-  2  usage error (bad flag, no such path, or 'check'/'remove' with no/unknown name)
+  2  usage error (bad flag, no such path, no/unknown name, or a refusal needing a flag like --overwrite)
 
 For CI, gate the whole project with \`manifest\` (scans everything); \`check\` is for one
 named skill and exits 2 without a name:
@@ -505,8 +505,10 @@ async function runAdd(
 
     const clash = selected.filter((s) => s.exists);
     if (clash.length && !values.overwrite) {
+      // A refusal-to-overwrite is a usage error (needs --overwrite), not a
+      // findings-threshold hit — exit 2, not 1.
       err(`preflight: already installed: ${clash.map((s) => s.name).join(", ")} (use --overwrite)\n`);
-      return 1;
+      return 2;
     }
     for (const item of selected) installItem(item, { overwrite: Boolean(values.overwrite) });
     out(
@@ -547,10 +549,12 @@ function runRemove(argv: string[], out: (s: string) => void, err: (s: string) =>
     return 2;
   }
   if ("wouldRemove" in res) {
+    // A successful preview — the command did exactly what a no---yes remove should.
+    // That's not a usage error; exit 0 (like a dry run that found nothing to gate).
     out(
       `would remove ${res.wouldRemove} (${res.files} file(s)). Re-run with --yes to move it to .preflight-trash/.\n`
     );
-    return 2;
+    return 0;
   }
   out(`removed ${res.removed} → .preflight-trash/\n`);
   return 0;

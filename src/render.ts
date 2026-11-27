@@ -19,12 +19,20 @@ function cleanMsg(message: string): string {
 export function renderPickList(items: InstallItem[], label: string): string {
   const nameW = Math.max(4, ...items.map((i) => i.name.length));
   const scopeW = Math.max(10, ...items.map((i) => i.row.scopeLabel.length));
-  const L = [`Skills in ${label} (${items.length} found):`, ""];
+  const desc = (r: SkillRow): string => {
+    const d = (r.scope.description ?? "").replace(/\s+/g, " ").trim();
+    return !d ? "(no description)" : d.length > 60 ? d.slice(0, 59) + "…" : d;
+  };
+  const L = [
+    `Skills in ${label} (${items.length} found):`,
+    "",
+    `  ${pad("#", 3)}  ${pad("NAME", nameW)}  ${pad("SCOPE", scopeW)}  ${pad("CHK", 5)} WHAT IT DOES`,
+  ];
   items.forEach((it, i) => {
     const r = it.row;
     const check = r.errorCount ? `✗ ${r.errorCount}` : r.warnCount ? `⚠ ${r.warnCount}` : "✓";
     L.push(
-      `  ${String(i + 1).padStart(3)}  ${pad(it.name, nameW)}  ${pad(r.scopeLabel, scopeW)}  ${pad(check, 5)} ${tok(r.alwaysTokens)}t/prompt`
+      `  ${String(i + 1).padStart(3)}  ${pad(it.name, nameW)}  ${pad(r.scopeLabel, scopeW)}  ${pad(check, 5)} ${desc(r)}`
     );
   });
   return L.join("\n");
