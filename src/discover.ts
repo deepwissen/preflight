@@ -1,4 +1,4 @@
-import { readdirSync, statSync, existsSync, readFileSync } from "node:fs";
+import { readdirSync, statSync, lstatSync, existsSync, readFileSync } from "node:fs";
 import { join, relative, resolve, basename, dirname } from "node:path";
 import { isSkillScopeFile, extractSkillScope } from "@deepwissen/preflight-core";
 
@@ -26,10 +26,11 @@ function walkFiles(root: string, skip: Set<string>, keep: (rel: string) => boole
       const abs = join(dir, name);
       let s;
       try {
-        s = statSync(abs);
+        s = lstatSync(abs); // lstat, NOT stat: never follow a symlink. A link to `/`
       } catch {
-        continue;
+        continue; // or a self/parent loop would otherwise walk forever (DoS).
       }
+      if (s.isSymbolicLink()) continue; // flagged by the bundle scanner; never traversed here
       if (s.isDirectory()) {
         if (!skip.has(name)) walk(abs);
       } else {
