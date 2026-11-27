@@ -1,10 +1,36 @@
-import { readFileSync, existsSync, statSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, statSync, readdirSync, lstatSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { findSkillFiles } from "./discover.js";
 import { buildRow, flatFindings } from "./manifest.js";
-import { scanMcpConfig, type Finding } from "./scan.js";
+import { scanMcpConfig, scanInstruction, type Finding } from "./scan.js";
 import { scanHooks, scanInlineHooks } from "./hooks.js";
+
+/** Recursively collect *.md paths (relative to `dir`), never following symlinks
+ *  (same DoS guard as the project walker). Bounded depth as a backstop. */
+function findMarkdown(dir: string, depth = 0): string[] {
+  if (depth > 12) return [];
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const name of entries) {
+    const abs = join(dir, name);
+    let s;
+    try {
+      s = lstatSync(abs);
+    } catch {
+      continue;
+    }
+    if (s.isSymbolicLink()) continue;
+    if (s.isDirectory()) out.push(...findMarkdown(abs, depth + 1).map((p) => join(name, p)));
+    else if (/\.md$/i.test(name)) out.push(name);
+  }
+  return out;
+}
 
 /**
  * Audit installed Claude Code plugins. A plugin is a bigger supply-chain surface than
@@ -174,6 +200,27 @@ function scanPluginAt(
   for (const rel of skillFiles) {
     const row = buildRow(join(installPath, rel), rel);
     for (const ff of flatFindings(row)) findings.push({ file: `${name}/${ff.file}`, finding: ff.finding });
+  }
+
+  // Bundled slash-commands and subagents (commands/*.md, agents/*.md) — instruction
+  // surfaces Claude Code loads and obeys, scanned like project ones (prompt-injection,
+  // hidden-unicode, embedded secrets). Previously skipped, so an injected plugin
+  // command/agent reported nothing.
+  for (const sub of ["commands", "agents"]) {
+    const dir = join(installPath, sub);
+    if (!existsSync(dir)) continue;
+    for (const rel of findMarkdown(dir)) {
+      const abs = join(dir, rel);
+      let content: string;
+      try {
+        content = readFileSync(abs, "utf8");
+      } catch {
+        continue;
+      }
+      for (const f of scanInstruction(`${sub}/${rel}`, content)) {
+        findings.push({ file: `${name}/${sub}/${rel}`, finding: f });
+      }
+    }
   }
 
   // Root .mcp.json.
