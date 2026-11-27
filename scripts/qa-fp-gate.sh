@@ -26,8 +26,9 @@ git -C "$SK" remote add origin https://github.com/anthropics/skills
 git -C "$SK" fetch -q --depth 1 origin "$SKILLS_SHA"
 git -C "$SK" checkout -q FETCH_HEAD
 
-echo "→ gate: $PF add <skills> --dry-run --fail-on warning  (must exit 0)"
-if $PF add "$SK" --dry-run --fail-on warning; then
+echo "→ gate: $PF add <skills> --pick all --dry-run --fail-on warning  (must exit 0)"
+# --pick all so it never drops into the interactive "Install which?" prompt in a TTY.
+if $PF add "$SK" --pick all --dry-run --fail-on warning </dev/null; then
   echo "✓ PASS — Anthropic's skills install without --force"
 else
   echo "✗ FAIL — a false positive on anthropics/skills would force --force. Do not publish."
