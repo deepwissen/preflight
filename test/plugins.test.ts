@@ -162,6 +162,28 @@ describe("discoverPlugins (installed_plugins.json, CC 2.1.332 layout)", () => {
   });
 });
 
+describe("discoverPlugins — a record whose folder is gone", () => {
+  it("reports 'installed but missing on disk' instead of silently skipping it", () => {
+    const home = mkdtempSync(join(tmpdir(), "pf-missing-"));
+    const prev = process.env.HOME;
+    try {
+      mkdirSync(join(home, ".claude", "plugins"), { recursive: true });
+      writeFileSync(
+        join(home, ".claude", "plugins", "installed_plugins.json"),
+        JSON.stringify({ plugins: { "ghost@mkt": [{ scope: "user", installPath: "~/.claude/plugins/cache/mkt/ghost/1.0.0", version: "1.0.0" }] } })
+      );
+      process.env.HOME = home;
+      const ghost = discoverPlugins().find((p) => p.name === "ghost");
+      expect(ghost).toBeDefined();
+      expect(ghost!.findings.some((f) => f.finding.rule === "plugin-missing-on-disk")).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.HOME;
+      else process.env.HOME = prev;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("discoverPlugins — corrupt plugin list", () => {
   it("throws (so the CLI exits 2) instead of silently reporting 0 plugins", () => {
     const home = mkdtempSync(join(tmpdir(), "pf-corrupt-"));

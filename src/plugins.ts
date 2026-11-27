@@ -308,9 +308,42 @@ export function discoverPlugins(): PluginInfo[] {
       byPath.set(ip, list);
     }
     for (const [installPath, group] of byPath) {
-      if (!isDir(installPath)) continue; // stale / missing on disk
       const scopes = [...new Set(group.map((r) => r.scope).filter(Boolean))] as string[];
       const projectPaths = [...new Set(group.map((r) => r.projectPath).filter(Boolean))] as string[];
+      if (!isDir(installPath)) {
+        // Recorded as installed but its folder is gone — surface it (not silently skip)
+        // so the user knows the record is stale and can't be audited.
+        out.push({
+          key,
+          name,
+          marketplace,
+          source: sources[marketplace] ?? "unknown",
+          version: group[0].version ?? "",
+          scopes,
+          projectPaths,
+          enabled: enabled.has(key),
+          installPath,
+          skills: 0,
+          commands: 0,
+          agents: 0,
+          hasMcp: false,
+          hasHooks: false,
+          findings: [
+            {
+              file: name,
+              finding: {
+                severity: "warning",
+                rule: "plugin-missing-on-disk",
+                message: `installed but missing on disk (${installPath}) — can't audit it`,
+                suggestion: "reinstall or remove the plugin so its record matches what's on disk",
+              },
+            },
+          ],
+          errorCount: 0,
+          warnCount: 1,
+        });
+        continue;
+      }
       out.push(
         scanPluginAt(
           installPath,

@@ -89,10 +89,9 @@ export function scanSkill(path: string, content: string): Finding[] {
       suggestion: i.suggestion,
     });
   }
-  // The body is instructions the agent follows — a `curl | bash` in it (even inside a
-  // code fence) is a directive to run remote code, so scan the prose for dangerous
-  // commands too, not just injection/secrets.
-  out.push(...scanDangerous(content, "", "script"));
+  // Dangerous commands the body tells the agent to run — fenced code only, capped at
+  // warning (prose that merely mentions `curl | sh` is not a directive). See markdownDanger.
+  out.push(...markdownDanger(content));
   return out;
 }
 
@@ -129,9 +128,9 @@ export function scanInstruction(path: string, content: string): Finding[] {
     if (suppressed(i.lineNumber, i.issue)) continue;
     out.push({ severity: i.severity ?? "warning", rule: i.issue, message: i.description, line: i.lineNumber, suggestion: i.suggestion });
   }
-  // Dangerous commands the doc tells the agent to run (`curl | bash`, even fenced) —
-  // an instruction surface, so this is a directive, not just an example.
-  out.push(...scanDangerous(content, "", "script"));
+  // Dangerous commands the doc tells the agent to run — fenced code only, warning-capped
+  // (an inline mention in prose is not a directive). See markdownDanger.
+  out.push(...markdownDanger(content));
   return out;
 }
 
@@ -148,6 +147,40 @@ function fencedLines(content: string): Set<number> {
     if (inFence) set.add(idx + 1);
   });
   return set;
+}
+
+/**
+ * Dangerous commands in a markdown instruction surface (SKILL.md, CLAUDE.md, a doc the
+ * agent is told to follow). Context-aware: ONLY fenced code is scanned — a `curl | sh`
+ * in prose ("never run curl | sh") is a warning against it, not a command — and findings
+ * are capped at WARNING. An actual script / hook / MCP command stays at error (via
+ * scanDangerous on those surfaces); a fenced doc sample the agent *might* run is lower
+ * confidence, so it blocks `add` (warning) without crying "remote code execution".
+ */
+function markdownDanger(content: string): Finding[] {
+  const out: Finding[] = [];
+  // 1. Slash-command pre-execution: Claude Code RUNS the content of !`…` before the model
+  //    even sees the command. That's an execution directive, not a mention — keep it at
+  //    error (this is the `!`curl … | sh`` attack).
+  const preExec = [...content.matchAll(/!`([^`]+)`/g)].map((m) => m[1]).join("\n");
+  if (preExec.trim()) out.push(...scanDangerous(preExec, "", "script"));
+  // 2. Fenced code the agent may be told to run — lower confidence → warning. Prose that
+  //    merely mentions `curl | sh` ("never run curl | sh") is NOT scanned.
+  const fenced = fencedLines(content);
+  const fence = content
+    .split(/\r?\n/)
+    .filter((_, i) => fenced.has(i + 1))
+    .join("\n");
+  if (fence.trim()) {
+    out.push(
+      ...scanDangerous(fence, "", "script").map((f) => ({
+        ...f,
+        severity: "warning" as const,
+        suggestion: "a fenced command the agent may be told to run — confirm it's safe before trusting this skill",
+      }))
+    );
+  }
+  return out;
 }
 
 function lineFrom(text: string): number | undefined {

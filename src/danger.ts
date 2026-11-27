@@ -14,7 +14,11 @@ import type { Finding } from "./scan.js";
 // Simple, unambiguous text-level patterns.
 const FETCH_EXECUTE = /\b(?:curl|wget|fetch)\b[^|&;]*\|\s*(?:sh|bash|zsh|python3?|node|deno)\b|\beval\b[^;]*\$\((?:curl|wget)\b/i;
 const OBFUSCATED_EXEC = /\bbase64\s+(?:-d|--decode|-D)\b[^|]*\|\s*(?:sh|bash|zsh|python3?|node)\b/i;
-const DESTRUCTIVE = /\brm\s+-[rf]{1,2}\s+(?:\/(?!tmp\b)|~\/|\$HOME\b)/i;
+// A catastrophic recursive delete — only the filesystem root, the home dir, or a
+// top-level system dir counts. A specific subfolder (`rm -rf /workspace/reports`,
+// `rm -rf ~/project/build`) is ordinary cleanup, not an attack.
+const DESTRUCTIVE =
+  /\brm\s+-[rf]{1,2}\s+(?:--?\w[\w-]*\s+)*(?:\/(?:\s|$|\*|;|&)|~\/?(?:\s|$|\*)|\$\{?HOME\}?\/?(?:\s|$|\*)?|\/(?:etc|usr|s?bin|var|lib(?:64)?|boot|sys|dev|proc|root|home|opt)(?:\/|\s|$|\*))/i;
 // Download-to-file, make executable, and run it — the two-step form FETCH_EXECUTE's
 // pipe check misses (`curl … -o /tmp/b && chmod +x /tmp/b && /tmp/b`). Needs BOTH a
 // download-to-file and a chmod +x so a plain `curl -o file` download stays clean.
