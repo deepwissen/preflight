@@ -14,11 +14,17 @@
 set -euo pipefail
 
 PF="${PF:-npx -y @deepwissen/preflight@latest}"
+# Pin a specific commit so the gate is reproducible — a new upstream skill can't block a
+# publish unexpectedly. Bump this deliberately when you want to test against newer skills.
+SKILLS_SHA="e4bb5d960d87126ff3b3a8af1a104b7db67560ba"
 SK="$(mktemp -d)/skills"
 trap 'rm -rf "$(dirname "$SK")"' EXIT
 
-echo "→ cloning anthropics/skills…"
-git clone --depth 1 --quiet https://github.com/anthropics/skills "$SK"
+echo "→ fetching anthropics/skills @ ${SKILLS_SHA:0:12}…"
+git init -q "$SK"
+git -C "$SK" remote add origin https://github.com/anthropics/skills
+git -C "$SK" fetch -q --depth 1 origin "$SKILLS_SHA"
+git -C "$SK" checkout -q FETCH_HEAD
 
 echo "→ gate: $PF add <skills> --dry-run --fail-on warning  (must exit 0)"
 if $PF add "$SK" --dry-run --fail-on warning; then

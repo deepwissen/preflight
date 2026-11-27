@@ -159,26 +159,27 @@ function fencedLines(content: string): Set<number> {
  */
 function markdownDanger(content: string): Finding[] {
   const out: Finding[] = [];
+  const seen = new Set<string>();
   // 1. Slash-command pre-execution: Claude Code RUNS the content of !`…` before the model
-  //    even sees the command. That's an execution directive, not a mention — keep it at
-  //    error (this is the `!`curl … | sh`` attack).
+  //    even sees the command. An execution directive, not a mention — keep it at error
+  //    (this is the `!`curl … | sh`` attack).
   const preExec = [...content.matchAll(/!`([^`]+)`/g)].map((m) => m[1]).join("\n");
-  if (preExec.trim()) out.push(...scanDangerous(preExec, "", "script"));
-  // 2. Fenced code the agent may be told to run — lower confidence → warning. Prose that
-  //    merely mentions `curl | sh` ("never run curl | sh") is NOT scanned.
-  const fenced = fencedLines(content);
-  const fence = content
-    .split(/\r?\n/)
-    .filter((_, i) => fenced.has(i + 1))
-    .join("\n");
-  if (fence.trim()) {
-    out.push(
-      ...scanDangerous(fence, "", "script").map((f) => ({
-        ...f,
-        severity: "warning" as const,
-        suggestion: "a fenced command the agent may be told to run — confirm it's safe before trusting this skill",
-      }))
-    );
+  if (preExec.trim()) {
+    for (const f of scanDangerous(preExec, "", "script")) {
+      seen.add(f.rule);
+      out.push(f);
+    }
+  }
+  // 2. The whole doc is instructions the agent reads — prose, inline code, indented
+  //    blocks, HTML comments, referenced docs. Flag dangerous commands at warning, but in
+  //    markdown mode a `curl | sh` needs a real URL (so "never run curl | sh" stays clean).
+  for (const f of scanDangerous(content, "", "script", true)) {
+    if (seen.has(f.rule)) continue; // already flagged at error by a !`…` pre-exec
+    out.push({
+      ...f,
+      severity: "warning",
+      suggestion: "a command this doc tells the agent to run — confirm it's safe before trusting this skill",
+    });
   }
   return out;
 }

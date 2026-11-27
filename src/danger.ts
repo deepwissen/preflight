@@ -13,12 +13,50 @@ import type { Finding } from "./scan.js";
 
 // Simple, unambiguous text-level patterns.
 const FETCH_EXECUTE = /\b(?:curl|wget|fetch)\b[^|&;]*\|\s*(?:sh|bash|zsh|python3?|node|deno)\b|\beval\b[^;]*\$\((?:curl|wget)\b/i;
+// Markdown variant: a real https://host piped to a shell. In a doc, `curl … | sh` must
+// carry an actual URL to flag — a bare "never run curl | sh" (no URL) is advice, not a
+// command. Covers prose, inline code, indented blocks, HTML comments — anywhere.
+const MD_FETCH_EXECUTE =
+  /\b(?:curl|wget|fetch)\b[^|&;\n]*\bhttps?:\/\/[^\s|]+[^|&;\n]*\|\s*(?:sh|bash|zsh|python3?|node|deno)\b/i;
 const OBFUSCATED_EXEC = /\bbase64\s+(?:-d|--decode|-D)\b[^|]*\|\s*(?:sh|bash|zsh|python3?|node)\b/i;
-// A catastrophic recursive delete — only the filesystem root, the home dir, or a
-// top-level system dir counts. A specific subfolder (`rm -rf /workspace/reports`,
-// `rm -rf ~/project/build`) is ordinary cleanup, not an attack.
-const DESTRUCTIVE =
-  /\brm\s+-[rf]{1,2}\s+(?:--?\w[\w-]*\s+)*(?:\/(?:\s|$|\*|;|&)|~\/?(?:\s|$|\*)|\$\{?HOME\}?\/?(?:\s|$|\*)?|\/(?:etc|usr|s?bin|var|lib(?:64)?|boot|sys|dev|proc|root|home|opt)(?:\/|\s|$|\*))/i;
+// A catastrophic delete target: the filesystem root, the home dir, a top-level system
+// dir, or a credential folder (~/.ssh, ~/.aws, ~/.gnupg). A specific project subfolder
+// (`/workspace/reports`, `~/project/build`, `$TMPDIR/cache`) is ordinary cleanup.
+function isCatastrophicTarget(raw: string): boolean {
+  const p = raw
+    .replace(/^["']|["']$/g, "") // strip surrounding quotes
+    .replace(/\$\{(\w+)\}/g, "$$$1") // ${HOME} -> $HOME
+    .replace(/[;&|)].*$/, "") // drop trailing shell operators
+    .trim();
+  if (!p) return false;
+  if (p === "/" || /^\/\*?$/.test(p)) return true; // root, /*
+  if (/^(~|\$HOME)\/?\*?$/.test(p)) return true; // home root: ~, ~/, ~/*, $HOME, $HOME/
+  if (/^\/(etc|usr|s?bin|var|lib(?:64)?|boot|sys|dev|proc|root|home|opt)(\/|$)/.test(p)) return true; // system dir
+  if (/^(~|\$HOME)\/\.(ssh|aws|gnupg|kube|docker)(\/|$)/.test(p)) return true; // credential folders
+  return false;
+}
+
+// A recursive+force `rm` (any flag spelling), or `find <root> -delete`, aimed at a
+// catastrophic target. Handles quoted/braced $HOME and split/long flags.
+function isDestructiveDelete(text: string): boolean {
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.replace(/\$\{(\w+)\}/g, "$$$1"); // ${HOME} -> $HOME per line
+    const fd = /\bfind\s+("[^"]*"|'[^']*'|\S+)[^\n]*\s-delete\b/i.exec(line);
+    if (fd && isCatastrophicTarget(fd[1])) return true;
+    const rm = /\brm\b\s+(.*\S)/i.exec(line);
+    if (rm) {
+      const tokens = rm[1].split(/\s+/);
+      const flags = tokens.filter((t) => t.startsWith("-")).join(" ");
+      const recursive = /--recursive\b/.test(flags) || /-\w*r/i.test(flags);
+      const force = /--force\b/.test(flags) || /-\w*f/i.test(flags);
+      if (recursive && force) {
+        const target = tokens.find((t) => !t.startsWith("-"));
+        if (target && isCatastrophicTarget(target)) return true;
+      }
+    }
+  }
+  return false;
+}
 // Download-to-file, make executable, and run it — the two-step form FETCH_EXECUTE's
 // pipe check misses (`curl … -o /tmp/b && chmod +x /tmp/b && /tmp/b`). Needs BOTH a
 // download-to-file and a chmod +x so a plain `curl -o file` download stays clean.
@@ -80,9 +118,11 @@ interface Hit {
 /** Scan shell/script text for dangerous commands. `prefix` ("hook" / "script" / "mcp")
  *  becomes the rule-id prefix. `where` is a human label (empty → message is just the
  *  reason, letting the caller/renderer supply the file location). */
-export function scanDangerous(text: string, where: string, prefix: string): Finding[] {
+export function scanDangerous(text: string, where: string, prefix: string, markdown = false): Finding[] {
   const hits: Hit[] = [];
-  if (FETCH_EXECUTE.test(text))
+  // In markdown the agent reads it as instructions, but a `curl | sh` mention needs a
+  // real URL to count (see MD_FETCH_EXECUTE); in a script it's always an execution.
+  if ((markdown ? MD_FETCH_EXECUTE : FETCH_EXECUTE).test(text))
     hits.push({ kind: "fetch-execute", severity: "error", what: "fetches a remote script and pipes it to a shell (remote code execution)" });
   if (DOWNLOAD_RUN(text))
     hits.push({ kind: "download-run", severity: "error", what: "downloads a remote file, marks it executable, and runs it (remote code execution)" });
@@ -100,8 +140,8 @@ export function scanDangerous(text: string, where: string, prefix: string): Find
     hits.push({ kind: "reverse-shell", severity: "error", what: "opens a reverse shell — socket connection plus a shell handoff (remote code execution)" });
   if (hasCredentialTheft(text))
     hits.push({ kind: "credential-access", severity: "error", what: "reads a credential file and pipes/sends it (credential theft)" });
-  if (DESTRUCTIVE.test(text))
-    hits.push({ kind: "destructive", severity: "error", what: "runs a destructive rm -rf on a home/root path" });
+  if (isDestructiveDelete(text))
+    hits.push({ kind: "destructive", severity: "error", what: "recursively deletes a home/root/system or credential path" });
 
   return hits.map((h) => ({
     severity: h.severity,
