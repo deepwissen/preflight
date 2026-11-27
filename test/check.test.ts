@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveSkill } from "../src/discover.js";
 import { buildRow } from "../src/manifest.js";
-import { renderCheck } from "../src/render.js";
+import { renderCheck, renderBlockedFindings } from "../src/render.js";
 
 let root: string;
 
@@ -68,5 +68,23 @@ describe("renderCheck", () => {
     const view = renderCheck(buildRow(r.absPath, r.displayPath));
     expect(view).toContain("FINDINGS (0)");
     expect(view).toContain("nothing was found");
+  });
+});
+
+describe("renderBlockedFindings (add gate / dry-run surface the reason)", () => {
+  it("lists each blocked skill's findings inline, not just a --force hint", () => {
+    const r = resolveSkill(root, "aws-deploy");
+    if ("error" in r) throw new Error(r.error);
+    const out = renderBlockedFindings([buildRow(r.absPath, r.displayPath)]);
+    expect(out).toContain("aws-deploy");
+    expect(out).toContain("finding"); // "(N finding(s))"
+    expect(out).toMatch(/\[(error|warning)\]/); // a severity-tagged finding line
+    expect(out).not.toContain("--force"); // the reason, not just the escape hatch
+  });
+
+  it("skips skills with no findings", () => {
+    const r = resolveSkill(root, "pr-review");
+    if ("error" in r) throw new Error(r.error);
+    expect(renderBlockedFindings([buildRow(r.absPath, r.displayPath)])).toBe("");
   });
 });

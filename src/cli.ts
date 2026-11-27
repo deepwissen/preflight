@@ -26,6 +26,7 @@ import {
   renderCheck,
   renderCheckJson,
   renderList,
+  renderBlockedFindings,
   renderPickList,
   renderPlugins,
 } from "./render.js";
@@ -119,13 +120,18 @@ install them from the internet — so preflight lets you SEE what you have, SCAN
 for risks (secrets, prompt-injection, over-broad access), and CHOOSE what to keep.
 Everything runs locally — nothing is sent anywhere, and a clean scan never means "safe".
 
+Using npx? Prefix every command below with "npx @deepwissen/preflight" (e.g.
+  npx @deepwissen/preflight list).
+
 New here? Try:
   preflight list              What skills do I have?
-  preflight check <name>      Is this one safe?  (shows a HEALTH verdict)
+  preflight check <name>      Is an installed skill safe?  (shows a HEALTH verdict)
+  preflight check ./folder    Inspect a skill you downloaded, BEFORE you install it
   preflight add owner/repo    Scan a repo's skills, then pick which to install
 
 Examples:
   preflight list --all                        project AND personal (~/.claude) skills
+  preflight check ./downloaded-skill          inspect a skill folder before installing it
   preflight add anthropics/skills --pick 1,3  clone, scan, install just #1 and #3
   preflight manifest --fail-on warning        fail CI if a committed skill is risky
   preflight plugins                           audit your installed plugins too
@@ -133,7 +139,8 @@ Examples:
 Commands:
   list [path]        Quick list of your skills (name · scope · check).
   manifest [path]    Full inventory — scope, token cost, and a scan of each.
-  check <skill>      Drill into one skill: scope, cost, and every finding + its fix.
+  check <skill|path>  Drill into one skill — an installed name, or any folder/file
+                      path to vet a skill BEFORE installing. Shows scope, cost, findings.
   add <source>       Scan skills from a path or owner/repo, then choose what to install.
   remove <name>      Move an installed skill to .preflight-trash/ (needs --yes).
   plugins            Audit installed plugins (~/.claude/plugins): where each came from + a scan.
@@ -453,16 +460,33 @@ async function runAdd(
       onDemandTotal: selected.reduce((n, s) => n + s.row.onDemandTokens, 0),
       settingsRisks: [],
     };
-    if (exitForReport(report, failOn as FailOn) === 1 && !values.force) {
-      const bad = selected.filter((s) => s.row.errorCount || s.row.warnCount).map((s) => s.name);
+    const gated = exitForReport(report, failOn as FailOn) === 1;
+    const bad = selected.filter((s) => s.row.errorCount || s.row.warnCount);
+    const badNames = bad.map((s) => s.name).join(", ");
+
+    // A dry run installs nothing either way — report what WOULD happen, with the
+    // findings inline, never "--force to install anyway".
+    if (values["dry-run"]) {
+      if (gated) {
+        out(
+          `\ndry run — would be BLOCKED: ${badNames} ha${bad.length > 1 ? "ve" : "s"} findings at/above "${failOn}" (nothing installed):\n` +
+            renderBlockedFindings(bad.map((s) => s.row)) +
+            `\n`
+        );
+      } else {
+        out(`\ndry run — would install ${selected.length}: ${selected.map((s) => s.name).join(", ")} (nothing installed)\n`);
+      }
+      return gated ? 1 : 0;
+    }
+
+    if (gated && !values.force) {
       err(
-        `\npreflight: blocked — ${bad.join(", ")} ha${bad.length > 1 ? "ve" : "s"} findings at/above "${failOn}". Re-run with --force to install anyway.\n`
+        `\npreflight: blocked — ${badNames} ha${bad.length > 1 ? "ve" : "s"} findings at/above "${failOn}":\n` +
+          renderBlockedFindings(bad.map((s) => s.row)) +
+          `\n\n  Inspect before trusting it: preflight check <name|path>. ` +
+          `Install anyway (not recommended) with --force.\n`
       );
       return 1;
-    }
-    if (values["dry-run"]) {
-      out(`\ndry run — would install ${selected.length}: ${selected.map((s) => s.name).join(", ")}\n`);
-      return 0;
     }
 
     const clash = selected.filter((s) => s.exists);

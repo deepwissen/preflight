@@ -369,6 +369,24 @@ export function renderCheck(row: SkillRow): string {
   return L.join("\n");
 }
 
+/** Compact per-skill findings list for the add gate and dry-run — shows the user
+ *  WHY a skill is blocked inline, instead of leaving `--force` as the only visible
+ *  way forward. Points each skill at `preflight check <path>` for the full report. */
+export function renderBlockedFindings(rows: SkillRow[]): string {
+  const L: string[] = [];
+  for (const r of rows) {
+    const fs = flatFindings(r);
+    if (!fs.length) continue;
+    L.push(`  ${r.name ?? r.path}  (${fs.length} finding${fs.length > 1 ? "s" : ""})`);
+    for (const { file, finding: f } of fs) {
+      const mark = f.severity === "error" ? "✗" : f.severity === "warning" ? "⚠" : "ℹ";
+      const where = file !== r.path ? `${file}: ` : "";
+      L.push(`     ${mark} [${f.severity}] ${where}${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`);
+    }
+  }
+  return L.join("\n");
+}
+
 /** Machine-readable single-skill check. */
 export function renderCheckJson(row: SkillRow): string {
   return JSON.stringify(
