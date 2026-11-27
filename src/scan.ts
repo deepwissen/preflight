@@ -197,6 +197,7 @@ function lineFrom(text: string): number | undefined {
 export function scanCode(path: string, content: string, languageId: string): Finding[] {
   const snap = emptySnapshot();
   snap.activeFile = fileInfo(path, content, languageId);
+  snap.aiInstructionFiles = [{ path, lineCount: content.split("\n").length, toolId: null, content }];
 
   const out: Finding[] = [];
   for (const f of scanSecrets(snap, {}).secretFindings ?? []) {
@@ -216,6 +217,14 @@ export function scanCode(path: string, content: string, languageId: string): Fin
       line: lineFrom(w.description),
       suggestion: w.suggestion,
     });
+  }
+  // Hidden-unicode / Trojan-Source bidi in bundled CODE — invisible to a reviewer but it
+  // changes what the code does (F8). Keep only the unicode integrity findings; prose/phrase
+  // checks don't apply to code.
+  for (const i of scanInstructionIntegrity(snap, {}).instructionFileIssues ?? []) {
+    if (i.issue === "hidden-unicode" || i.issue === "bidi-override") {
+      out.push({ severity: i.severity ?? "warning", rule: i.issue, message: i.description, line: i.lineNumber, suggestion: i.suggestion });
+    }
   }
   return out;
 }

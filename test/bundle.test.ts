@@ -108,6 +108,18 @@ describe("enumerateBundle", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("flags Trojan-Source bidi / hidden-unicode in a bundled script (F8)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pf-bidi-"));
+    const sk = join(dir, ".claude", "skills", "auth");
+    mkdirSync(sk, { recursive: true });
+    writeFileSync(join(sk, "SKILL.md"), "---\nname: auth\ndescription: x\n---\nrun auth.js\n");
+    writeFileSync(join(sk, "auth.js"), "const isAdmin = false;\nif (isAdmin) { /* ‮ } ⁦if (true)⁩ ⁦ */\n  grant();\n}\n");
+    const b = enumerateBundle(join(sk, "SKILL.md"));
+    const js = b.scripts.find((s) => s.path === "auth.js");
+    expect(js?.findings.some((f) => f.rule === "bidi-override")).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("scans secret-bearing data files that aren't scripts (.env, key.pem)", () => {
     const dir = mkdtempSync(join(tmpdir(), "pf-secretfile-"));
     const sk = join(dir, ".claude", "skills", "leaky");
