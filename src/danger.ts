@@ -27,18 +27,25 @@ function hasReverseShell(text: string): boolean {
   return REVSHELL_STRONG.test(text) || (SOCKET_CONNECT.test(text) && SHELL_HANDOFF.test(text));
 }
 
-// Credential theft: a credential PATH plus a read/send ACTION on the same
-// (non-comment) line. A bare mention of ~/.ssh in a comment, or a .pem used by
-// ordinary TLS code, must not fire. (Bare .pem dropped — far too broad.)
-const CRED_PATH = /~\/\.ssh\/|\bid_rsa\b|\bid_ed25519\b|~\/\.aws\/credentials|\bcredentials\.json\b/i;
+// Credential theft: a credential PATH plus a read/send ACTION, in non-comment code
+// anywhere in the SAME FILE (real code splits `p = expanduser("~/.aws/credentials")`
+// from `open(p).read()`). Path is prefix-agnostic — ~/, $HOME/, os.homedir()+ all
+// resolve to .aws/credentials or .ssh/id_*. Comment-only mentions and ordinary TLS
+// (.pem) are ignored.
+const CRED_PATH =
+  /\.aws\/credentials|\.ssh\/(?:id_\w+|authorized_keys)|\bid_rsa\b|\bid_ed25519\b|\bcredentials\.json\b/i;
 const READ_SEND =
-  /\b(?:cat|less|more|head|tail|cp|mv|scp|rsync|curl|wget|nc|base64|xxd|openssl|tar|zip|dd|open|read|readFile|readFileSync|readFileText|ReadAllText|Get-Content)\b|[<>]/i;
+  /\b(?:cat|less|more|head|tail|cp|mv|scp|rsync|curl|wget|nc|ncat|base64|xxd|openssl|tar|zip|dd|open|read|readFile|readFileSync|ReadAllText|Get-Content|urlopen|fetch|send|post)\b|requests\.(?:get|post|put)/i;
 const COMMENT_LINE = /^\s*(?:#|\/\/|\/\*|\*|<!--|;|--)/;
 
 function hasCredentialTheft(text: string): boolean {
+  let path = false;
+  let action = false;
   for (const line of text.split(/\r?\n/)) {
     if (COMMENT_LINE.test(line)) continue; // skip comments — defensive mentions aren't theft
-    if (CRED_PATH.test(line) && READ_SEND.test(line)) return true;
+    if (!path && CRED_PATH.test(line)) path = true;
+    if (!action && READ_SEND.test(line)) action = true;
+    if (path && action) return true;
   }
   return false;
 }

@@ -104,22 +104,25 @@ export function scanInstruction(path: string, content: string): Finding[] {
   snap.activeFile = fileInfo(path, content);
   snap.aiInstructionFiles = [{ path, lineCount: content.split("\n").length, toolId: null, content }];
 
-  // Lines inside fenced code blocks (``` / ~~~) are examples, not instructions the
-  // agent follows — suppress secret/injection/role-tag findings there (xoxp-placeholders,
-  // `authorizationToken` samples, a `system:` key in a ```yaml block). Hidden-unicode and
-  // bidi are kept everywhere — a smuggled char in an example is still a smuggled char.
+  // The agent reads fenced code in a doc as instructions too, so we do NOT skip whole
+  // blocks. We only suppress the two narrow role FPs inside fences — an LLM role tag
+  // (`<|im_start|>`) or a bare role key (`system:` / `user:` in a ```yaml example) isn't
+  // a real attack when it's a documented sample. Concealment phrases, credential reads,
+  // real-format secrets and hidden-unicode stay flagged everywhere (placeholder tokens are
+  // cleared by the secret scanner's own placeholder guard, in or out of a fence). The
+  // engine gives role keys their own `role-key-echo` id so suppressing them here can't
+  // also silence the suspicious-instruction phrases that must fire inside fences.
   const fenced = fencedLines(content);
-  const KEEP_IN_FENCE = new Set(["hidden-unicode", "bidi-override"]);
-  const inExampleFence = (line?: number, rule?: string): boolean =>
-    Boolean(line && fenced.has(line)) && !KEEP_IN_FENCE.has(rule ?? "");
+  const SUPPRESS_IN_FENCE = new Set(["role-tag-spoofing", "role-key-echo"]);
+  const suppressed = (line?: number, rule?: string): boolean =>
+    Boolean(line && fenced.has(line)) && SUPPRESS_IN_FENCE.has(rule ?? "");
 
   const out: Finding[] = [];
   for (const f of scanSecrets(snap, {}).secretFindings ?? []) {
-    if (inExampleFence(f.lineNumber, f.ruleId)) continue;
     out.push({ severity: f.severity, rule: f.ruleId, message: f.description, line: f.lineNumber, suggestion: f.suggestion });
   }
   for (const i of scanInstructionIntegrity(snap, {}).instructionFileIssues ?? []) {
-    if (inExampleFence(i.lineNumber, i.issue)) continue;
+    if (suppressed(i.lineNumber, i.issue)) continue;
     out.push({ severity: i.severity ?? "warning", rule: i.issue, message: i.description, line: i.lineNumber, suggestion: i.suggestion });
   }
   return out;
