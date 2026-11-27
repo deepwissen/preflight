@@ -4,7 +4,7 @@ import { skillHealth, type HealthStatus } from "./health.js";
 import type { InstallItem } from "./install.js";
 
 function hmark(s: HealthStatus): string {
-  return s === "ok" ? "✓" : s === "warn" ? "⚠" : "✗";
+  return s === "ok" ? "✓" : s === "info" ? "ℹ" : s === "warn" ? "⚠" : "✗";
 }
 
 /** Strip a trailing "in <file> line N" / "line N" the engine embeds in some messages,
