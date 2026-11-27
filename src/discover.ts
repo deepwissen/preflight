@@ -63,14 +63,23 @@ export function isSkillRow(rel: string): boolean {
  * SKILL.md anywhere (incl. plugin-bundled / npx-installed) and
  * .claude/{commands,agents}/**.md. Returns paths relative to `root`.
  */
-export function findSkillFiles(root: string, extraSkip: Iterable<string> = []): string[] {
-  return walkFiles(root, new Set([...SKIP_DIRS, ...extraSkip]), isSkillRow);
+export function findSkillFiles(
+  root: string,
+  extraSkip: Iterable<string> = [],
+  claudeRoot = false
+): string[] {
+  // In the user scope the walk root IS ~/.claude, so commands/agents sit at the top
+  // (commands/x.md), not under a .claude/ prefix — match those too.
+  const match = claudeRoot
+    ? (rel: string): boolean => isSkillRow(rel) || /^(commands|agents)\/.+\.md$/i.test(rel)
+    : isSkillRow;
+  return walkFiles(root, new Set([...SKIP_DIRS, ...extraSkip]), match);
 }
 
 // Always-on instruction/context files the agent reads every session, but which
 // grant no tools: a CLAUDE.md (memory) or a .claude/rules/*.md (path-scoped rule).
-const CONTEXT_PATH = /(^|\/)CLAUDE\.md$/i;
-const RULE_PATH = /(^|\/)\.claude\/rules\/.*\.md$/i;
+const CONTEXT_PATH = /(^|\/)CLAUDE(\.local)?\.md$/i; // CLAUDE.md and the git-ignored CLAUDE.local.md
+const RULE_PATH = /(^|\/)\.claude\/rules\/.*\.md$|^rules\/.+\.md$/i; // project .claude/rules, or user-scope top-level rules/
 
 /** Classify an always-on context file: "rule", "context" (CLAUDE.md), or null. */
 export function contextKind(path: string): "rule" | "context" | null {
@@ -80,8 +89,16 @@ export function contextKind(path: string): "rule" | "context" | null {
 }
 
 /** Walk a project tree for always-on context files (CLAUDE.md, .claude/rules/*.md). */
-export function findContextFiles(root: string, extraSkip: Iterable<string> = []): string[] {
-  return walkFiles(root, new Set([...SKIP_DIRS, ...extraSkip]), (rel) => contextKind(rel) !== null);
+export function findContextFiles(
+  root: string,
+  extraSkip: Iterable<string> = [],
+  claudeRoot = false
+): string[] {
+  return walkFiles(
+    root,
+    new Set([...SKIP_DIRS, ...extraSkip]),
+    (rel) => contextKind(rel) !== null || (claudeRoot && /^rules\/.+\.md$/i.test(rel))
+  );
 }
 
 export interface Resolved {

@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, dirname, relative } from "node:path";
+import { join, dirname, relative, resolve } from "node:path";
 import { extractSkillScope, type SkillScope } from "@deepwissen/preflight-core";
 import { findSkillFiles, findContextFiles, contextKind } from "./discover.js";
 import { scanSkill, scanInstruction, scanMcpConfig, type Finding } from "./scan.js";
@@ -91,9 +91,41 @@ export interface ManifestReport {
 }
 
 /** Build one context-file row: always-on token cost + an instruction-integrity scan. */
+// Claude Code `@path` imports in a CLAUDE.md pull another file's content into context
+// (recursively). preflight must follow them, or injection hidden one hop away in
+// `@docs/agent.md` is invisible. Require a file-ish path (has an extension) and that
+// it's preceded by whitespace/start so `user@example.com` isn't treated as an import.
+const IMPORT_RE = /(?:^|[\s(])@((?:~\/|\.{0,2}\/)?[\w.\-/]+\.\w+)/g;
+
+function scanImports(fromAbs: string, content: string, seen: Set<string>, depth: number): Finding[] {
+  if (depth > 3) return []; // bounded — imports can chain, but don't recurse forever
+  const out: Finding[] = [];
+  const base = dirname(fromAbs);
+  IMPORT_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = IMPORT_RE.exec(content))) {
+    const raw = m[1];
+    const abs = resolve(base, raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw);
+    if (seen.has(abs)) continue;
+    seen.add(abs);
+    if (!existsSync(abs)) continue;
+    let imported: string;
+    try {
+      imported = readFileSync(abs, "utf8");
+    } catch {
+      continue;
+    }
+    for (const f of scanInstruction(`@${raw}`, imported)) {
+      out.push({ ...f, message: `imported @${raw}: ${f.message}` });
+    }
+    out.push(...scanImports(abs, imported, seen, depth + 1));
+  }
+  return out;
+}
+
 export function buildContextRow(absPath: string, displayPath: string): ContextRow {
   const content = readFileSync(absPath, "utf8");
-  const findings = scanInstruction(displayPath, content);
+  const findings = [...scanInstruction(displayPath, content), ...scanImports(absPath, content, new Set([absPath]), 0)];
   return {
     path: displayPath,
     kind: contextKind(displayPath) === "rule" ? "rule" : "context",
@@ -203,9 +235,9 @@ export function exitForReport(report: ManifestReport, failOn: FailOn): number {
 }
 
 /** Build the agent-skill manifest for a directory (optionally skipping dirs). */
-export function buildManifest(root: string, skip: Iterable<string> = []): ManifestReport {
-  const rows = findSkillFiles(root, skip).map((rel) => buildRow(join(root, rel), rel));
-  const contextFiles = findContextFiles(root, skip).map((rel) => buildContextRow(join(root, rel), rel));
+export function buildManifest(root: string, skip: Iterable<string> = [], claudeRoot = false): ManifestReport {
+  const rows = findSkillFiles(root, skip, claudeRoot).map((rel) => buildRow(join(root, rel), rel));
+  const contextFiles = findContextFiles(root, skip, claudeRoot).map((rel) => buildContextRow(join(root, rel), rel));
   return {
     root,
     rows,
@@ -224,7 +256,7 @@ export function buildScopes(scopes: Scope[]): ManifestReport {
   const contextFiles: ContextRow[] = [];
   const settingsRisks: LocatedFinding[] = [];
   for (const s of scopes) {
-    const sub = buildManifest(s.scanRoot, s.skip);
+    const sub = buildManifest(s.scanRoot, s.skip, s.name === "user");
     for (const row of sub.rows) rows.push(multi ? { ...row, origin: s.name } : row);
     contextFiles.push(...sub.contextFiles);
     settingsRisks.push(...scopeSettingsRisks(s));
