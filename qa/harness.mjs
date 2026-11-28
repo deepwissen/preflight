@@ -32,7 +32,8 @@ export function run(args, cwd, home, timeout = 60000) {
   const t = Date.now();
   const r = spawnSync(PF[0], [...PF.slice(1), ...args], {
     cwd, encoding: "utf8", timeout,
-    env: { ...process.env, HOME: home, NO_COLOR: "1" },
+    // USERPROFILE too: os.homedir() reads it on Windows, HOME on POSIX.
+    env: { ...process.env, HOME: home, USERPROFILE: home, NO_COLOR: "1" },
   });
   return { code: r.status, out: (r.stdout || "") + (r.stderr || ""), stdout: r.stdout || "", ms: Date.now() - t, timedOut: r.error?.code === "ETIMEDOUT" };
 }
