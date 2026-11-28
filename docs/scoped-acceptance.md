@@ -107,9 +107,13 @@ tools see the full picture.
 
 ## Rollout
 
-1. Reader + gate integration + dimmed rendering (manifest/check).
-2. `accept` subcommand (write path) + `--list` / `--prune`.
-3. `add` integration (accept applies to already-installed; new installs still use the
+1. ✅ Reader + gate integration (`manifest` / `check` exclude accepted findings).
+2. ✅ `accept` subcommand (write path) + `--list` / `--prune`.
+3. ✅ Dimmed rendering across `manifest` / `check` / `--json` / `--sarif`: accepted
+   findings shown dimmed and tagged `[accepted: <reason>]` (SARIF `suppressions`,
+   JSON `accepted` field); a stale-hash acceptance fires at full weight with an
+   `[acceptance stale — re-review]` note.
+4. `add` integration (accept applies to already-installed; new installs still use the
    explicit flag, never a bundled file).
-4. Docs + an article: *"How we let you accept a false positive without accepting the
+5. Docs + an article: *"How we let you accept a false positive without accepting the
    next attack."*

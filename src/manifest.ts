@@ -181,17 +181,35 @@ export interface AcceptCtx {
   projectRoot: string;
 }
 
+/** Acceptance status for a single finding, keyed by rule + repo-root-relative file.
+ *  Returns `{}` when no acceptance applies (or no ctx) — so callers can spread it. */
+export function findingAcceptance(
+  rule: string,
+  locatedFile: string,
+  accept?: AcceptCtx
+): { accepted?: string; acceptStale?: boolean } {
+  if (!accept || accept.acceptances.length === 0) return {};
+  const abs = locatedFile.startsWith("~/") ? join(homedir(), locatedFile.slice(2)) : join(accept.projectRoot, locatedFile);
+  const v = checkAcceptance(rule, locatedFile, abs, accept.acceptances);
+  if (v?.status === "accepted") return { accepted: v.reason };
+  if (v?.status === "stale") return { acceptStale: true };
+  return {};
+}
+
+/** The repo-root-relative path a finding is reported under — matching reportFindings:
+ *  a bundled script (file relative to the skill dir) is re-rooted, and a user-scope
+ *  skill is prefixed so personal skills are distinct from committed ones. */
+export function locatedPath(row: SkillRow, file: string): string {
+  const prefix = row.origin === "user" ? "~/.claude/" : "";
+  if (file === row.path) return prefix + row.path;
+  const dir = dirname(row.path);
+  return prefix + (dir === "." ? file : `${dir}/${file}`);
+}
+
 /** Every finding across the report, each with a repo-root-relative path — bundled
  *  scripts are re-rooted from skill-dir-relative to repo-relative for reporting. */
 export function reportFindings(report: ManifestReport, accept?: AcceptCtx): LocatedFinding[] {
-  const annotate = (f: LocatedFinding): LocatedFinding => {
-    if (!accept || accept.acceptances.length === 0) return f;
-    const abs = f.file.startsWith("~/") ? join(homedir(), f.file.slice(2)) : join(accept.projectRoot, f.file);
-    const v = checkAcceptance(f.rule, f.file, abs, accept.acceptances);
-    if (v?.status === "accepted") return { ...f, accepted: v.reason };
-    if (v?.status === "stale") return { ...f, acceptStale: true };
-    return f;
-  };
+  const annotate = (f: LocatedFinding): LocatedFinding => ({ ...f, ...findingAcceptance(f.rule, f.file, accept) });
   const out: LocatedFinding[] = [];
   for (const r of report.rows) {
     // Under --all, a user-scope path is relative to ~/.claude and otherwise looks

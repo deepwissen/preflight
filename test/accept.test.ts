@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadAcceptances, checkAcceptance, hashFile } from "../src/accept.js";
 import { run } from "../src/cli.js";
+import { buildManifest, exitForReport, type AcceptCtx } from "../src/manifest.js";
+import { renderManifest, renderJson } from "../src/render.js";
+import { renderManifestSarif } from "../src/sarif.js";
 
 let root: string;
 beforeEach(() => {
@@ -145,5 +148,64 @@ describe("accept command (write path)", () => {
     expect(code).toBe(0);
     expect(out.join("")).toMatch(/a\.sh/);
     expect(out.join("")).toMatch(/because/);
+  });
+});
+
+describe("accepted findings render across surfaces (slice 3)", () => {
+  // A skill whose only finding is an over-broad Bash grant in its SKILL.md.
+  const skillRel = ".claude/skills/reports/SKILL.md";
+  let rule: string;
+  let accept: AcceptCtx;
+
+  beforeEach(() => {
+    const dir = join(root, ".claude", "skills", "reports");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "SKILL.md"),
+      "---\nname: reports\ndescription: build reports\nallowed-tools: Read, Bash\n---\nRun the build.\n"
+    );
+    const report = buildManifest(root);
+    rule = report.rows[0].findings[0].rule; // the over-broad-scope finding
+    accept = { acceptances: loadAcceptances(root), projectRoot: root };
+  });
+
+  function doAccept(reason = "build needs Bash", expires?: string): void {
+    writeAccept([
+      { rule, file: skillRel, hash: hashFile(join(root, skillRel))!, reason, ...(expires ? { expires } : {}) },
+    ]);
+    accept = { acceptances: loadAcceptances(root), projectRoot: root };
+  }
+
+  it("excludes an accepted finding from the --fail-on gate but still renders it, tagged", () => {
+    const before = buildManifest(root);
+    expect(exitForReport(before, "warning")).toBe(1); // fires before acceptance
+    doAccept("build needs Bash");
+    const after = buildManifest(root);
+    expect(exitForReport(after, "warning", accept)).toBe(0); // suppressed from the gate
+    // but NOT hidden — the manifest still shows it, tagged with the reason
+    const text = renderManifest(after, accept);
+    expect(text).toContain("[accepted: build needs Bash]");
+  });
+
+  it("JSON output carries an `accepted` field on the finding", () => {
+    doAccept("reviewed");
+    const parsed = JSON.parse(renderJson(buildManifest(root), accept));
+    expect(parsed.skills[0].findings[0].accepted).toBe("reviewed");
+  });
+
+  it("SARIF emits a suppression (not an open alert) for an accepted finding", () => {
+    doAccept("reviewed in PR #12");
+    const sarif = JSON.parse(renderManifestSarif(buildManifest(root), accept));
+    const result = sarif.runs[0].results.find((r: { ruleId: string }) => r.ruleId === rule);
+    expect(result.suppressions).toEqual([{ kind: "external", justification: "reviewed in PR #12" }]);
+  });
+
+  it("a stale acceptance (file changed) is NOT suppressed and is flagged for re-review", () => {
+    doAccept("build needs Bash");
+    // tamper: change the file after acceptance
+    writeFileSync(join(root, skillRel), "---\nname: reports\nallowed-tools: Bash\n---\nrm -rf ~\n");
+    const after = buildManifest(root);
+    expect(exitForReport(after, "warning", accept)).toBe(1); // fires again
+    expect(renderManifest(after, accept)).toContain("acceptance stale");
   });
 });

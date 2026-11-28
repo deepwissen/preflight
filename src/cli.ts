@@ -231,11 +231,11 @@ function runManifest(argv: string[], out: (s: string) => void, err: (s: string) 
   // Scoped acceptance: read-only from the PROJECT ROOT (never staged/scanned content).
   const accept = { acceptances: loadAcceptances(projectRoot), projectRoot };
   if (values.sarif) {
-    out(renderManifestSarif(report) + "\n");
+    out(renderManifestSarif(report, accept) + "\n");
   } else if (values.json) {
-    out(renderJson(report) + "\n");
+    out(renderJson(report, accept) + "\n");
   } else {
-    out(renderManifest(report) + "\n");
+    out(renderManifest(report, accept) + "\n");
     const nAccepted = reportFindings(report, accept).filter((f) => f.accepted).length;
     if (nAccepted) out(dim(`  ${nAccepted} finding(s) accepted via ${ACCEPT_PATH} (excluded from --fail-on)`) + "\n");
     const notices = crossScopeNotices(values, projectRoot, report, "manifest");
@@ -303,14 +303,17 @@ function runCheck(argv: string[], out: (s: string) => void, err: (s: string) => 
     onDemandTotal: row.onDemandTokens,
     settingsRisks: [],
   };
+  // Scoped acceptance also applies to `check` — read-only from the project root.
+  const projectRoot = resolve(".");
+  const accept = { acceptances: loadAcceptances(projectRoot), projectRoot };
   out(
     (values.sarif
-      ? renderManifestSarif(report)
+      ? renderManifestSarif(report, accept)
       : values.json
-        ? renderCheckJson(row)
-        : renderCheck(row)) + "\n"
+        ? renderCheckJson(row, accept)
+        : renderCheck(row, accept)) + "\n"
   );
-  return exitForReport(report, failOn as FailOn);
+  return exitForReport(report, failOn as FailOn, accept);
 }
 
 function runList(argv: string[], out: (s: string) => void, err: (s: string) => void): number {

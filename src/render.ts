@@ -1,4 +1,12 @@
-import { flatFindings, type LocatedFinding, type ManifestReport, type SkillRow } from "./manifest.js";
+import {
+  flatFindings,
+  findingAcceptance,
+  locatedPath,
+  type AcceptCtx,
+  type LocatedFinding,
+  type ManifestReport,
+  type SkillRow,
+} from "./manifest.js";
 import { detectCollisions, detectAmbiguities, analyzeConflicts } from "./collisions.js";
 import { skillHealth, type HealthStatus } from "./health.js";
 import type { InstallItem } from "./install.js";
@@ -12,6 +20,20 @@ function sev(severity: string, s: string): string {
 
 function hmark(s: HealthStatus): string {
   return s === "ok" ? green("✓") : s === "info" ? dim("ℹ") : s === "warn" ? yellow("⚠") : redBold("✗");
+}
+
+/** Trailing tag for an accepted / stale finding — carried in the text (not just color)
+ *  so it survives NO_COLOR: `[accepted: …]` for a live acceptance, a re-review note for
+ *  a stale one (the file changed since it was accepted). Empty when neither applies. */
+function acceptTag(a: { accepted?: string; acceptStale?: boolean }): string {
+  if (a.accepted) return dim(`  [accepted: ${a.accepted}]`);
+  if (a.acceptStale) return yellow(`  [acceptance stale — re-review]`);
+  return "";
+}
+
+/** Dim a whole finding line when it's accepted (reviewed-OK) — never hidden, just quieted. */
+function softenAccepted(line: string, a: { accepted?: string }): string {
+  return a.accepted ? dim(line) : line;
 }
 
 /** Strip a trailing "in <file> line N" / "line N" the engine embeds in some messages,
@@ -94,7 +116,7 @@ export function summaryLine(report: ManifestReport): string {
 /** The "ALWAYS-ON CONTEXT" block — CLAUDE.md + .claude/rules/*.md the agent reads
  *  every session. Shows each file's token cost (the visibility) and any injection
  *  findings. Clean files are listed too — the cost itself is the point. */
-function contextSection(report: ManifestReport): string[] {
+function contextSection(report: ManifestReport, accept?: AcceptCtx): string[] {
   if (report.contextFiles.length === 0) return [];
   const flagged = report.contextFiles.filter((c) => c.errorCount || c.warnCount).length;
   const total = report.contextFiles.reduce((n, c) => n + c.alwaysTokens, 0);
@@ -105,7 +127,10 @@ function contextSection(report: ManifestReport): string[] {
   for (const c of report.contextFiles) {
     const worst = c.errorCount ? redBold("✗") : c.warnCount ? yellow("⚠") : c.findings.length ? dim("ℹ") : dim("·");
     L.push("", `  ${worst} ${c.path}   ~${tok(c.alwaysTokens)}t  (${c.kind})`);
-    for (const f of c.findings) L.push(`     • [${f.severity}] ${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`);
+    for (const f of c.findings) {
+      const a = findingAcceptance(f.rule, c.path, accept);
+      L.push(softenAccepted(`     • [${f.severity}] ${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`, a) + acceptTag(a));
+    }
   }
   return L;
 }
@@ -113,7 +138,7 @@ function contextSection(report: ManifestReport): string[] {
 /** The "CONFIG & HOOKS" block — settings.json things your agent loads automatically
  *  (hooks, apiKeyHelper, env, permissions, marketplaces). Grouped by file, worst-
  *  severity marker per file. Empty when no settings risks found. */
-function configSection(report: ManifestReport): string[] {
+function configSection(report: ManifestReport, accept?: AcceptCtx): string[] {
   if (report.settingsRisks.length === 0) return [];
   const byFile = new Map<string, LocatedFinding[]>();
   for (const h of report.settingsRisks) {
@@ -126,22 +151,29 @@ function configSection(report: ManifestReport): string[] {
   for (const [file, fs] of byFile) {
     const worst = fs.some((f) => f.severity === "error") ? redBold("✗") : fs.some((f) => f.severity === "warning") ? yellow("⚠") : dim("ℹ");
     L.push("", `  ${worst} ${file}`);
-    for (const f of fs) L.push(`     • [${f.severity}] ${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`);
+    for (const f of fs) {
+      const a = findingAcceptance(f.rule, file, accept);
+      L.push(softenAccepted(`     • [${f.severity}] ${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`, a) + acceptTag(a));
+    }
   }
   return L;
 }
 
 /** Render the agent-skill manifest as the human "loadout" screen. */
-export function renderManifest(report: ManifestReport): string {
+export function renderManifest(report: ManifestReport, accept?: AcceptCtx): string {
   const { rows } = report;
   if (rows.length === 0 && report.settingsRisks.length === 0 && report.contextFiles.length === 0) {
     return `Preflight · manifest\n${report.root}\n\nNo agent skills found (.claude/skills, commands, agents, or SKILL.md).`;
   }
   if (rows.length === 0) {
     // No skills, but context/settings risks are present — still worth surfacing.
-    return [`preflight · ${summaryLine(report)}`, report.root, ...contextSection(report), ...configSection(report), ""].join(
-      "\n"
-    );
+    return [
+      `preflight · ${summaryLine(report)}`,
+      report.root,
+      ...contextSection(report, accept),
+      ...configSection(report, accept),
+      "",
+    ].join("\n");
   }
 
   const nameW = Math.max(6, ...rows.map((r) => (r.name ?? r.path).length));
@@ -185,7 +217,11 @@ export function renderManifest(report: ManifestReport): string {
       L.push(`  ${r.errorCount ? "✗" : "⚠"} ${r.name ?? r.path}      ${r.path}`);
       for (const { file, finding: f } of flatFindings(r)) {
         const where = file !== r.path ? `${file}: ` : "";
-        L.push(`     • [${f.severity}] ${where}${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`);
+        const a = findingAcceptance(f.rule, locatedPath(r, file), accept);
+        L.push(
+          softenAccepted(`     • [${f.severity}] ${where}${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`, a) +
+            acceptTag(a)
+        );
       }
       L.push(`     → preflight check ${r.name ?? r.path}`);
     }
@@ -224,8 +260,8 @@ export function renderManifest(report: ManifestReport): string {
     }
   }
 
-  L.push(...contextSection(report));
-  L.push(...configSection(report));
+  L.push(...contextSection(report, accept));
+  L.push(...configSection(report, accept));
 
   L.push("");
   L.push("─".repeat(78));
@@ -320,7 +356,7 @@ export function renderList(report: ManifestReport): string {
 }
 
 /** Render a single skill's detailed check view (the manifest drill-in). */
-export function renderCheck(row: SkillRow): string {
+export function renderCheck(row: SkillRow, accept?: AcceptCtx): string {
   const s = row.scope;
   const L: string[] = [];
   L.push(`Preflight · check — ${row.name ?? row.path}`);
@@ -385,9 +421,15 @@ export function renderCheck(row: SkillRow): string {
     for (const { file, finding: f } of flat) {
       const mark = f.severity === "error" ? "✗" : f.severity === "warning" ? "⚠" : "ℹ";
       const where = file !== row.path ? ` in ${bold(file)}` : "";
+      const a = findingAcceptance(f.rule, locatedPath(row, file), accept);
       L.push("");
-      L.push(`  ${sev(f.severity, `${mark} [${f.severity}]`)} ${bold(f.rule)}${f.line ? `  (line ${f.line})` : ""}${where}`);
-      L.push(`    ${cleanMsg(f.message)}`);
+      L.push(
+        softenAccepted(
+          `  ${sev(f.severity, `${mark} [${f.severity}]`)} ${bold(f.rule)}${f.line ? `  (line ${f.line})` : ""}${where}`,
+          a
+        ) + acceptTag(a)
+      );
+      L.push(softenAccepted(`    ${cleanMsg(f.message)}`, a));
       if (f.suggestion) L.push(`    ${cyan(`→ ${f.suggestion}`)}`);
     }
   }
@@ -419,8 +461,25 @@ export function renderBlockedFindings(
   return L.join("\n");
 }
 
+/** Tag each of a skill's findings (its own + bundled scripts') with acceptance status,
+ *  so JSON consumers see `accepted`/`acceptStale` next to the finding they belong to. */
+function annotatedRowFindings(row: SkillRow, accept?: AcceptCtx): {
+  findings: Array<LocatedFinding | object>;
+  bundle: object;
+} {
+  const tag = (file: string, f: { rule: string }): object => ({ ...f, ...findingAcceptance(f.rule, locatedPath(row, file), accept) });
+  return {
+    findings: row.findings.map((f) => tag(row.path, f) as LocatedFinding),
+    bundle: {
+      ...row.bundle,
+      scripts: row.bundle.scripts.map((sc) => ({ ...sc, findings: sc.findings.map((f) => tag(sc.path, f)) })),
+    },
+  };
+}
+
 /** Machine-readable single-skill check. */
-export function renderCheckJson(row: SkillRow): string {
+export function renderCheckJson(row: SkillRow, accept?: AcceptCtx): string {
+  const { findings, bundle } = annotatedRowFindings(row, accept);
   return JSON.stringify(
     {
       path: row.path,
@@ -437,8 +496,8 @@ export function renderCheckJson(row: SkillRow): string {
       },
       alwaysTokens: row.alwaysTokens,
       onDemandTokens: row.onDemandTokens,
-      findings: row.findings,
-      bundle: row.bundle,
+      findings,
+      bundle,
     },
     null,
     2
@@ -446,39 +505,42 @@ export function renderCheckJson(row: SkillRow): string {
 }
 
 /** Machine-readable manifest. */
-export function renderJson(report: ManifestReport): string {
+export function renderJson(report: ManifestReport, accept?: AcceptCtx): string {
   return JSON.stringify(
     {
       root: report.root,
       alwaysTotal: report.alwaysTotal,
       onDemandTotal: report.onDemandTotal,
       conflicts: analyzeConflicts(report.rows),
-      skills: report.rows.map((r) => ({
-        path: r.path,
-        name: r.name,
-        scope: {
-          label: r.scopeLabel,
-          declaredTools: r.scope.declaredTools,
-          tools: r.scope.tools.map((t) => t.raw),
-          broad: r.scope.broad,
-          broadGrants: r.scope.broadGrants,
-          mcpServers: r.scope.mcpServers,
-          referencedScripts: r.scope.referencedScripts,
-        },
-        alwaysTokens: r.alwaysTokens,
-        onDemandTokens: r.onDemandTokens,
-        findings: r.findings,
-        bundle: r.bundle,
-      })),
+      skills: report.rows.map((r) => {
+        const { findings, bundle } = annotatedRowFindings(r, accept);
+        return {
+          path: r.path,
+          name: r.name,
+          scope: {
+            label: r.scopeLabel,
+            declaredTools: r.scope.declaredTools,
+            tools: r.scope.tools.map((t) => t.raw),
+            broad: r.scope.broad,
+            broadGrants: r.scope.broadGrants,
+            mcpServers: r.scope.mcpServers,
+            referencedScripts: r.scope.referencedScripts,
+          },
+          alwaysTokens: r.alwaysTokens,
+          onDemandTokens: r.onDemandTokens,
+          findings,
+          bundle,
+        };
+      }),
       // config/hook/MCP findings (settings.json, .mcp.json) and always-on context
       // (CLAUDE.md, rules) — the same findings SARIF and the exit code include. These
       // were missing, so a JSON consumer saw a clean project with e.g. a curl|sh hook.
-      config: report.settingsRisks,
+      config: report.settingsRisks.map((h) => ({ ...h, ...findingAcceptance(h.rule, h.file, accept) })),
       context: report.contextFiles.map((c) => ({
         path: c.path,
         kind: c.kind,
         alwaysTokens: c.alwaysTokens,
-        findings: c.findings,
+        findings: c.findings.map((f) => ({ ...f, ...findingAcceptance(f.rule, c.path, accept) })),
       })),
     },
     null,

@@ -1,12 +1,12 @@
-import { reportFindings, type ManifestReport, type LocatedFinding } from "./manifest.js";
+import { reportFindings, type ManifestReport, type LocatedFinding, type AcceptCtx } from "./manifest.js";
 import type { PluginInfo } from "./plugins.js";
 
 function level(s: LocatedFinding["severity"]): string {
   return s === "error" ? "error" : s === "warning" ? "warning" : "note";
 }
 
-export function renderManifestSarif(report: ManifestReport): string {
-  return findingsToSarif(reportFindings(report));
+export function renderManifestSarif(report: ManifestReport, accept?: AcceptCtx): string {
+  return findingsToSarif(reportFindings(report, accept));
 }
 
 /** Flatten plugin audit findings to SARIF (same shape as the manifest's). */
@@ -48,6 +48,10 @@ function findingsToSarif(findings: LocatedFinding[]): string {
               },
             },
           ],
+          // An accepted finding is a reviewed, hash-pinned exception — emit it as a SARIF
+          // suppression so GitHub code scanning shows it dismissed (reason in the
+          // justification) instead of as an open alert, while it stays in the output.
+          ...(f.accepted ? { suppressions: [{ kind: "external", justification: f.accepted }] } : {}),
         })),
       },
     ],
