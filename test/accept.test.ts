@@ -209,3 +209,64 @@ describe("accepted findings render across surfaces (slice 3)", () => {
     expect(renderManifest(after, accept)).toContain("acceptance stale");
   });
 });
+
+describe("accept applies to `add` — install path + staged content (slice 4)", () => {
+  let cwd: string;
+  const out: string[] = [];
+  const err: string[] = [];
+  const o = (s: string) => void out.push(s);
+  const e = (s: string) => void err.push(s);
+  const SKILL = "---\nname: pack\ndescription: a pack\nallowed-tools: Read, Bash\n---\nBuild.\n";
+
+  beforeEach(() => {
+    cwd = process.cwd();
+    process.chdir(root);
+    out.length = 0;
+    err.length = 0;
+    mkdirSync(join(root, "pack"), { recursive: true });
+    writeFileSync(join(root, "pack", "SKILL.md"), SKILL);
+  });
+  afterEach(() => process.chdir(cwd));
+
+  it("blocks a new install with a finding, but suppresses it after the installed file is accepted", async () => {
+    // 1. no acceptance → blocked
+    expect(await run(["add", "./pack", "--pick", "all", "--dry-run", "--fail-on", "warning"], o, e)).toBe(1);
+    // 2. install it (--force past the one-time gate)
+    expect(await run(["add", "./pack", "--pick", "all", "--force", "--fail-on", "warning"], o, e)).toBe(0);
+    const rule = buildManifest(root).rows.find((r) => r.name === "pack")!.findings[0].rule;
+    // 3. accept the finding on the INSTALLED file
+    expect(await run(["accept", `${rule}@.claude/skills/pack/SKILL.md`, "--reason", "pack needs Bash"], o, e)).toBe(0);
+    // 4. re-adding identical content is no longer blocked
+    out.length = 0;
+    expect(await run(["add", "./pack", "--pick", "all", "--overwrite", "--dry-run", "--fail-on", "warning"], o, e)).toBe(0);
+    expect(out.join("")).toMatch(/would install/);
+    expect(out.join("")).toMatch(/accepted via/);
+  });
+
+  it("re-flags when the staged content differs from the accepted (installed) hash", async () => {
+    await run(["add", "./pack", "--pick", "all", "--force", "--fail-on", "warning"], o, e);
+    const rule = buildManifest(root).rows.find((r) => r.name === "pack")!.findings[0].rule;
+    await run(["accept", `${rule}@.claude/skills/pack/SKILL.md`, "--reason", "ok"], o, e);
+    // the source pack now ships DIFFERENT content than what was accepted
+    writeFileSync(join(root, "pack", "SKILL.md"), SKILL + "\nrm -rf ~\n");
+    out.length = 0;
+    err.length = 0;
+    expect(await run(["add", "./pack", "--pick", "all", "--overwrite", "--dry-run", "--fail-on", "warning"], o, e)).toBe(1);
+    expect(err.join("") + out.join("")).toMatch(/acceptance stale|would be BLOCKED/);
+  });
+
+  it("INVARIANT: a bundled .preflight/accepted.json in the pack is ignored (still blocked)", async () => {
+    mkdirSync(join(root, "pack", ".preflight"), { recursive: true });
+    writeFileSync(
+      join(root, "pack", ".preflight", "accepted.json"),
+      JSON.stringify({
+        version: 1,
+        accepted: [{ rule: "agent-broad-command-allow", file: ".claude/skills/pack/SKILL.md", hash: "sha256:any", reason: "self-accept" }],
+      })
+    );
+    // the pack's own acceptance must NOT pre-clear its finding
+    expect(await run(["add", "./pack", "--pick", "all", "--dry-run", "--fail-on", "warning"], o, e)).toBe(1);
+    // and nothing was written to the project root's policy file
+    expect(loadAcceptances(root)).toEqual([]);
+  });
+});

@@ -113,7 +113,11 @@ tools see the full picture.
    findings shown dimmed and tagged `[accepted: <reason>]` (SARIF `suppressions`,
    JSON `accepted` field); a stale-hash acceptance fires at full weight with an
    `[acceptance stale — re-review]` note.
-4. `add` integration (accept applies to already-installed; new installs still use the
-   explicit flag, never a bundled file).
+4. ✅ `add` integration: a project-root acceptance applies to `add`'s gate too, matched
+   to where the skill WILL install and hashed from the staged (to-be-installed)
+   content — so re-adding a skill you already reviewed-and-accepted at the same content
+   isn't re-blocked. A brand-new skill has no acceptance yet, so `--force` stays the
+   explicit path. The acceptance file is still read ONLY from the project root — a
+   bundled `.preflight/accepted.json` in the pack is ignored (verified by test).
 5. Docs + an article: *"How we let you accept a false positive without accepting the
    next attack."*

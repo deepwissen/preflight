@@ -9,9 +9,11 @@ import {
   buildRow,
   exitForReport,
   reportFindings,
+  flatFindings,
   failThreshold,
   type FailOn,
   type ManifestReport,
+  type SkillRow,
 } from "./manifest.js";
 import {
   projectScope,
@@ -35,7 +37,15 @@ import {
 } from "./render.js";
 import { renderManifestSarif, renderPluginsSarif } from "./sarif.js";
 import { setColorEnabled, redBold, dim, green, yellow, bold } from "./color.js";
-import { loadAcceptances, saveAcceptances, hashFile, gitUser, ACCEPT_PATH, type Acceptance } from "./accept.js";
+import {
+  loadAcceptances,
+  saveAcceptances,
+  hashFile,
+  gitUser,
+  checkAcceptance,
+  ACCEPT_PATH,
+  type Acceptance,
+} from "./accept.js";
 import { discoverPlugins, type PluginInfo } from "./plugins.js";
 import {
   stageSource,
@@ -165,6 +175,7 @@ Accepting a false positive (instead of --force):
   preflight accept --list      Show acceptances and which are active / stale / expired.
   preflight accept --prune     Drop stale-hash and expired acceptances.
   Accepted findings are shown dimmed and excluded from --fail-on — never silently hidden.
+  Applies to add too: re-adding a skill you already accepted (same content) isn't re-blocked.
   The acceptance file is read ONLY from your project root, never from scanned/cloned content.
 
 Options:
@@ -497,17 +508,42 @@ async function runAdd(
     }
 
     // --- gate the chosen skills, then install ---
-    const report: ManifestReport = {
-      root: src,
-      rows: selected.map((s) => s.row),
-      contextFiles: [],
-      alwaysTotal: selected.reduce((n, s) => n + s.row.alwaysTokens, 0),
-      onDemandTotal: selected.reduce((n, s) => n + s.row.onDemandTokens, 0),
-      settingsRisks: [],
+    // Scoped acceptance applies to `add` too, but matched to where each skill WILL
+    // install (destDir, repo-root-relative) and hashed from the STAGED content that
+    // gets copied there — so re-adding a skill you already reviewed-and-accepted at the
+    // same content isn't re-blocked. The acceptance file is read ONLY from the project
+    // root (loadAcceptances below), never from the staged pack: a bundled
+    // .preflight/accepted.json can never pre-clear its own payload.
+    const projectRoot = resolve(".");
+    const acceptances = loadAcceptances(projectRoot);
+    const rankOf = (sv: string): number => (sv === "error" ? 3 : sv === "warning" ? 2 : 1);
+    const threshold = failThreshold(failOn as FailOn);
+    // For one staged skill: resolve a finding's acceptance by install path + staged hash.
+    const acceptFor = (item: InstallItem) => (file: string, rule: string) => {
+      if (!acceptances.length) return {};
+      const within = file === item.row.path ? basename(item.row.path) : file;
+      const installedFile = toPosix(relative(projectRoot, join(item.destDir, within)));
+      const v = checkAcceptance(rule, installedFile, join(item.srcDir, within), acceptances);
+      if (v?.status === "accepted") return { accepted: v.reason };
+      if (v?.status === "stale") return { acceptStale: true };
+      return {};
     };
-    const gated = exitForReport(report, failOn as FailOn) === 1;
-    const bad = selected.filter((s) => s.row.errorCount || s.row.warnCount);
+    const liveFindings = (item: InstallItem): ReturnType<typeof flatFindings> => {
+      const a = acceptFor(item);
+      return flatFindings(item.row).filter(({ file, finding }) => !a(file, finding.rule).accepted);
+    };
+    const gated = selected.some((s) => liveFindings(s).some(({ finding }) => rankOf(finding.severity) >= threshold));
+    const bad = selected.filter((s) => liveFindings(s).some(({ finding }) => finding.severity !== "info"));
     const badNames = bad.map((s) => s.name).join(", ");
+    // Skills whose findings were fully cleared by an acceptance — reported, not hidden.
+    const nAccepted = selected.reduce((n, s) => {
+      const a = acceptFor(s);
+      return n + flatFindings(s.row).filter(({ file, finding }) => a(file, finding.rule).accepted).length;
+    }, 0);
+    const acceptNote = nAccepted
+      ? dim(`  ${nAccepted} finding(s) accepted via ${ACCEPT_PATH} (excluded from the gate)\n`)
+      : "";
+    const rowAccept = new Map(selected.map((s) => [s.row, acceptFor(s)] as const));
 
     // The real on-disk path to inspect, for a LOCAL source (a cloned repo is staged
     // in a temp dir that's gone after this runs, so there's no stable path to point
@@ -520,7 +556,8 @@ async function runAdd(
         localRoot ? join(localRoot, relative(join(staging.dir, basename(localRoot)), s.srcDir)) : undefined,
       ] as const)
     );
-    const blocked = (): string => renderBlockedFindings(bad.map((s) => s.row), (r) => inspectPath.get(r));
+    const blocked = (): string =>
+      renderBlockedFindings(bad.map((s) => s.row), (r) => inspectPath.get(r), (r) => rowAccept.get(r)!);
 
     // A dry run installs nothing either way — report what WOULD happen, with the
     // findings inline, never "--force to install anyway".
@@ -529,10 +566,14 @@ async function runAdd(
         out(
           `\ndry run — would be BLOCKED: ${badNames} ha${bad.length > 1 ? "ve" : "s"} findings at/above "${failOn}" (nothing installed):\n` +
             blocked() +
-            `\n`
+            `\n` +
+            acceptNote
         );
       } else {
-        out(`\ndry run — would install ${selected.length}: ${selected.map((s) => s.name).join(", ")} (nothing installed)\n`);
+        out(
+          `\ndry run — would install ${selected.length}: ${selected.map((s) => s.name).join(", ")} (nothing installed)\n` +
+            acceptNote
+        );
       }
       return gated ? 1 : 0;
     }
@@ -541,6 +582,7 @@ async function runAdd(
       err(
         `\n${redBold(`preflight: blocked — ${badNames} ha${bad.length > 1 ? "ve" : "s"} findings at/above "${failOn}":`)}\n` +
           blocked() +
+          acceptNote +
           `\n\n  Inspect before trusting it with preflight check (path above, or <name> once installed). ` +
           `Install anyway (not recommended) with --force.\n`
       );
@@ -558,7 +600,7 @@ async function runAdd(
     out(
       `\ninstalled ${selected.length} skill(s) into ${target.name} scope (${target.skillsDir}): ${selected
         .map((s) => s.name)
-        .join(", ")}\n`
+        .join(", ")}\n` + acceptNote
     );
     return 0;
   } finally {

@@ -441,19 +441,27 @@ export function renderCheck(row: SkillRow, accept?: AcceptCtx): string {
  *  way forward. Points each skill at `preflight check <path>` for the full report. */
 export function renderBlockedFindings(
   rows: SkillRow[],
-  pathFor?: (r: SkillRow) => string | undefined
+  pathFor?: (r: SkillRow) => string | undefined,
+  acceptFor?: (r: SkillRow) => (file: string, rule: string) => { accepted?: string; acceptStale?: boolean }
 ): string {
   const L: string[] = [];
   for (const r of rows) {
     const fs = flatFindings(r);
     if (!fs.length) continue;
+    const annotate = acceptFor?.(r);
     L.push(`  ${bold(r.name ?? r.path)}  (${fs.length} finding${fs.length > 1 ? "s" : ""})`);
     for (const { file, finding: f } of fs) {
       const mark = f.severity === "error" ? "✗" : f.severity === "warning" ? "⚠" : "ℹ";
       // Always name the file for consistency — SKILL.md: like a bundle's scripts/x.py:
       // (a finding in the skill's own file carries the full path; show just the basename).
       const where = file === r.path ? basename(file) : file;
-      L.push(`     ${sev(f.severity, `${mark} [${f.severity}]`)} ${where}: ${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`);
+      const a = annotate?.(file, f.rule) ?? {};
+      L.push(
+        softenAccepted(
+          `     ${sev(f.severity, `${mark} [${f.severity}]`)} ${where}: ${cleanMsg(f.message)}${f.line ? ` (line ${f.line})` : ""}`,
+          a
+        ) + acceptTag(a)
+      );
     }
     const p = pathFor?.(r);
     if (p) L.push(cyan(`     → inspect: preflight check ${p}`));
