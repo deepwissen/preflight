@@ -3,6 +3,7 @@ import { resolve, dirname, join, basename, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { homedir } from "node:os";
 import {
   buildScopes,
   buildRow,
@@ -20,6 +21,7 @@ import {
   type Scope,
 } from "./scopes.js";
 import { skillName } from "./collisions.js";
+import { toPosix } from "./paths.js";
 import { resolveSkill, type Resolved } from "./discover.js";
 import {
   renderManifest,
@@ -32,8 +34,8 @@ import {
   renderPlugins,
 } from "./render.js";
 import { renderManifestSarif, renderPluginsSarif } from "./sarif.js";
-import { setColorEnabled, redBold, dim } from "./color.js";
-import { loadAcceptances, ACCEPT_PATH } from "./accept.js";
+import { setColorEnabled, redBold, dim, green, yellow, bold } from "./color.js";
+import { loadAcceptances, saveAcceptances, hashFile, gitUser, ACCEPT_PATH, type Acceptance } from "./accept.js";
 import { discoverPlugins, type PluginInfo } from "./plugins.js";
 import {
   stageSource,
@@ -147,12 +149,23 @@ Commands:
                       path to vet a skill BEFORE installing. Shows scope, cost, findings.
   add <source>       Scan skills from a path or owner/repo, then choose what to install.
   remove <name>      Move an installed skill to .preflight-trash/ (needs --yes).
+  accept <rule>@<file>  Record a scoped, reviewed exception for one finding (see below).
   plugins            Audit installed plugins (~/.claude/plugins): where each came from + a scan.
 
 Scope (list / manifest / check / add / remove):
   (default)          this project's skills — ./.claude/skills
   --global           your personal skills — ~/.claude/skills
   --all              both at once (list / manifest), with a WHERE column
+
+Accepting a false positive (instead of --force):
+  preflight accept <rule>@<file> --reason "…" [--expires YYYY-MM-DD]
+                     Record that THIS finding on THIS file is reviewed-OK. Pins the file's
+                     content hash (re-flags if it changes) into .preflight/accepted.json —
+                     commit it so the exception is reviewed in a PR. A reason is required.
+  preflight accept --list      Show acceptances and which are active / stale / expired.
+  preflight accept --prune     Drop stale-hash and expired acceptances.
+  Accepted findings are shown dimmed and excluded from --fail-on — never silently hidden.
+  The acceptance file is read ONLY from your project root, never from scanned/cloned content.
 
 Options:
   --json             Machine-readable output
@@ -588,6 +601,124 @@ function runRemove(argv: string[], out: (s: string) => void, err: (s: string) =>
   return 0;
 }
 
+/** Live status of a stored acceptance against the file as it is on disk right now. */
+function acceptanceStatus(a: Acceptance, projectRoot: string, today: string): "active" | "stale" | "expired" {
+  const abs = a.file.startsWith("~/") ? join(homedir(), a.file.slice(2)) : join(projectRoot, a.file);
+  if (hashFile(abs) !== a.hash) return "stale";
+  if (a.expires && a.expires < today) return "expired";
+  return "active";
+}
+
+/**
+ * `accept` — author/inspect scoped exceptions in <projectRoot>/.preflight/accepted.json.
+ *   preflight accept <rule>@<file> --reason "…" [--expires YYYY-MM-DD]
+ *   preflight accept --list     show each acceptance + whether it is active / stale / expired
+ *   preflight accept --prune    drop stale-hash and expired entries
+ * The file is ALWAYS the project root's — never staged/cloned content (the core invariant).
+ */
+function runAccept(argv: string[], out: (s: string) => void, err: (s: string) => void): number {
+  let values: Record<string, unknown>;
+  let positionals: string[];
+  try {
+    const parsed = parseArgs({
+      args: argv,
+      allowPositionals: true,
+      options: {
+        reason: { type: "string" },
+        expires: { type: "string" },
+        list: { type: "boolean" },
+        prune: { type: "boolean" },
+      },
+    });
+    values = parsed.values;
+    positionals = parsed.positionals;
+  } catch (e) {
+    err(`preflight: ${(e as Error).message}\n`);
+    return 2;
+  }
+
+  const projectRoot = resolve(".");
+  const today = new Date().toISOString().slice(0, 10);
+  const list = loadAcceptances(projectRoot);
+
+  if (values.list) {
+    if (!list.length) {
+      out(`No acceptances recorded in ${ACCEPT_PATH}.\n`);
+      return 0;
+    }
+    out(`Acceptances in ${ACCEPT_PATH}:\n`);
+    for (const a of list) {
+      const s = acceptanceStatus(a, projectRoot, today);
+      const tag =
+        s === "active" ? green("● active") : s === "expired" ? yellow("○ expired") : redBold("○ stale");
+      const exp = a.expires ? dim(`  expires ${a.expires}`) : "";
+      out(`  ${tag}  ${bold(a.rule)} @ ${a.file}${exp}\n`);
+      out(`       ${dim(a.reason)}\n`);
+    }
+    return 0;
+  }
+
+  if (values.prune) {
+    const kept = list.filter((a) => acceptanceStatus(a, projectRoot, today) === "active");
+    const dropped = list.length - kept.length;
+    if (dropped === 0) {
+      out(`Nothing to prune — all ${list.length} acceptance(s) are active.\n`);
+      return 0;
+    }
+    saveAcceptances(projectRoot, kept);
+    out(`Pruned ${dropped} stale/expired acceptance(s); ${kept.length} remain in ${ACCEPT_PATH}.\n`);
+    return 0;
+  }
+
+  // Write path: preflight accept <rule>@<file> --reason "…" [--expires …]
+  const spec = positionals[0];
+  const at = spec ? spec.indexOf("@") : -1;
+  if (!spec || at <= 0 || at === spec.length - 1) {
+    err(`preflight accept: usage — preflight accept <rule>@<file> --reason "<why>" [--expires YYYY-MM-DD]\n`);
+    return 2;
+  }
+  const rule = spec.slice(0, at);
+  const file = toPosix(spec.slice(at + 1));
+  const reason = typeof values.reason === "string" ? values.reason.trim() : "";
+  if (!reason) {
+    err(`preflight accept: --reason "<why>" is required — an acceptance must say why it's safe\n`);
+    return 2;
+  }
+  const expires = typeof values.expires === "string" ? values.expires.trim() : "";
+  if (expires && !/^\d{4}-\d{2}-\d{2}$/.test(expires)) {
+    err(`preflight accept: --expires must be an ISO date (YYYY-MM-DD)\n`);
+    return 2;
+  }
+  const abs = join(projectRoot, file);
+  if (!existsSync(abs)) {
+    err(`preflight accept: no such file in this project: ${file}\n`);
+    return 2;
+  }
+  const hash = hashFile(abs);
+  if (!hash) {
+    err(`preflight accept: can't read ${file} to hash it\n`);
+    return 2;
+  }
+  const entry: Acceptance = {
+    rule,
+    file,
+    hash,
+    reason,
+    ...(expires ? { expires } : {}),
+    ...(gitUser() ? { acceptedBy: gitUser() } : {}),
+    acceptedAt: today,
+  };
+  // Replace any existing acceptance for the same rule+file (re-accepting a changed file).
+  const next = list.filter((a) => !(a.rule === rule && toPosix(a.file) === file));
+  next.push(entry);
+  saveAcceptances(projectRoot, next);
+  out(
+    `Accepted ${bold(rule)} on ${file} → ${ACCEPT_PATH}.\n` +
+      dim(`  Commit ${ACCEPT_PATH} so the exception is reviewed in a PR.\n`)
+  );
+  return 0;
+}
+
 function runPlugins(argv: string[], out: (s: string) => void, err: (s: string) => void): number {
   let values: Record<string, unknown>;
   try {
@@ -647,6 +778,7 @@ export async function run(
   if (sub === "check") return runCheck(argv.slice(1), out, err);
   if (sub === "add") return runAdd(argv.slice(1), out, err);
   if (sub === "remove") return runRemove(argv.slice(1), out, err);
+  if (sub === "accept") return runAccept(argv.slice(1), out, err);
   if (sub === "plugins") return runPlugins(argv.slice(1), out, err);
   err(`preflight: unknown command "${sub}" (try: preflight --help)\n`);
   return 2;

@@ -1,4 +1,5 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { toPosix } from "./paths.js";
@@ -48,6 +49,22 @@ export function hashFile(absPath: string): string | null {
     return "sha256:" + createHash("sha256").update(readFileSync(absPath)).digest("hex");
   } catch {
     return null;
+  }
+}
+
+/** Write the acceptance list back to <projectRoot>/.preflight/accepted.json. */
+export function saveAcceptances(projectRoot: string, list: Acceptance[]): void {
+  const dir = join(projectRoot, ".preflight");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "accepted.json"), JSON.stringify({ version: 1, accepted: list }, null, 2) + "\n");
+}
+
+/** The committer's name from git, for the audit trail — best-effort, never fails. */
+export function gitUser(): string | undefined {
+  try {
+    return execFileSync("git", ["config", "user.name"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || undefined;
+  } catch {
+    return undefined;
   }
 }
 
