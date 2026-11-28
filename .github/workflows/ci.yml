@@ -44,8 +44,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    # Windows scenario suites are new — run for visibility; drop once proven green.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
