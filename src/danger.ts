@@ -108,10 +108,12 @@ function hasReverseShell(text: string): boolean {
 // from `open(p).read()`). Path is prefix-agnostic — ~/, $HOME/, os.homedir()+ all
 // resolve to .aws/credentials or .ssh/id_*. Comment-only mentions and ordinary TLS
 // (.pem) are ignored.
+// Separators are `[\\/]` so a Windows path (`%USERPROFILE%\.aws\credentials`,
+// `$env:USERPROFILE\.ssh\id_rsa`) matches as well as a POSIX one.
 const CRED_PATH =
-  /\.aws\/credentials|\.ssh\/(?:id_\w+|authorized_keys)|\bid_rsa\b|\bid_ed25519\b|\bcredentials\.json\b|\.netrc\b|gh\/hosts\.ya?ml|\.config\/gh\b/i;
+  /\.aws[\\/]credentials|\.ssh[\\/](?:id_\w+|authorized_keys)|\bid_rsa\b|\bid_ed25519\b|\bcredentials\.json\b|\.netrc\b|gh[\\/]hosts\.ya?ml|\.config[\\/]gh\b/i;
 const READ_SEND =
-  /\b(?:cat|less|more|head|tail|cp|mv|scp|rsync|curl|wget|nc|ncat|base64|xxd|openssl|tar|zip|dd|open|read|readFile|readFileSync|ReadAllText|Get-Content|urlopen|fetch|send|post)\b|requests\.(?:get|post|put)/i;
+  /\b(?:cat|less|more|head|tail|cp|mv|scp|rsync|curl|wget|nc|ncat|base64|xxd|openssl|tar|zip|dd|open|read|readFile|readFileSync|ReadAllText|Get-Content|gc|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|urlopen|fetch|send|post)\b|requests\.(?:get|post|put)/i;
 const COMMENT_LINE = /^\s*(?:#|\/\/|\/\*|\*|<!--|;|--)/;
 
 function hasCredentialTheft(text: string): boolean {

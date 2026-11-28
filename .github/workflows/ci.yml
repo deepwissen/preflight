@@ -13,8 +13,8 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: "npm"
@@ -29,25 +29,31 @@ jobs:
   floor:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - run: node scripts/check-engine-floor.mjs
 
-  # Behavioral QA: the scenario suites (real attacks must stay flagged, benign skills
-  # must stay clean) AND the anthropics false-positive gate (Anthropic's own skills must
-  # install without --force). This is what stops a rule change from regressing in either
-  # direction. plugins.sh needs the `claude` CLI, so it's a local-only check.
+  # Behavioral QA: the scenario suites (real files/paths — the ones that catch the next
+  # backslash bug) run on Linux AND Windows. The anthropics false-positive gate is bash +
+  # git clone, so Linux only. plugins.sh needs the `claude` CLI → local-only.
   qa:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # Windows scenario suites are new — run for visibility; drop once proven green.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: "npm"
       - run: npm ci
       - run: npm run build
-      - run: npm run qa # skills.mjs + config.mjs scenario suites (exit non-zero on any fail)
-      - run: npm run qa:fp-gate # clones anthropics/skills @ pinned SHA, must scan clean
+      - run: npm run qa # skills.mjs + config.mjs scenario suites (plain Node, cross-platform)
+      - run: npm run qa:fp-gate # bash + git clone — Linux only
+        if: matrix.os == 'ubuntu-latest'

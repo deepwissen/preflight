@@ -31,8 +31,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "check:floor": "node scripts/check-engine-floor.mjs",
-    "qa:skills": "node qa/harness.mjs ./skills.mjs \"node $PWD/dist/bin.js\"",
-    "qa:config": "node qa/harness.mjs ./config.mjs \"node $PWD/dist/bin.js\"",
+    "qa:skills": "node qa/harness.mjs ./skills.mjs \"node ./dist/bin.js\"",
+    "qa:config": "node qa/harness.mjs ./config.mjs \"node ./dist/bin.js\"",
     "qa": "npm run qa:skills && npm run qa:config",
     "qa:fp-gate": "PF=\"node ./dist/bin.js\" bash scripts/qa-fp-gate.sh",
     "prepublishOnly": "npm ci && npm run build && npm test && npm run qa && npm run qa:fp-gate"

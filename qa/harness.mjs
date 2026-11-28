@@ -1,18 +1,28 @@
 // preflight scenario harness — each scenario gets a fresh project dir + HOME.
 // Usage: node harness.mjs <scenario-module.mjs> [PF command, default: npx -y @deepwissen/preflight@latest]
 import { mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 
 const PF = (process.argv[3] || "npx -y @deepwissen/preflight@latest").split(" ");
+// `node ./dist/bin.js` → make the path absolute (relative to the harness's cwd), since
+// scenarios spawn with cwd=<temp project>. Cross-platform — no $PWD / %CD% shell-ism.
+if (PF[0] === "node" && PF[1] && !isAbsolute(PF[1])) PF[1] = resolve(PF[1]);
 const { scenarios } = await import(process.argv[2]);
 
 function writeTree(root, tree = {}) {
   for (const [rel, content] of Object.entries(tree)) {
     const p = join(root, rel);
     mkdirSync(dirname(p), { recursive: true });
-    if (content && typeof content === "object" && content.symlink) symlinkSync(content.symlink, p);
+    if (content && typeof content === "object" && content.symlink) {
+      // Windows needs a privilege to create symlinks; don't crash the whole run if denied.
+      try {
+        symlinkSync(content.symlink, p);
+      } catch {
+        /* skip — symlink scenarios may degrade on Windows */
+      }
+    }
     else if (content && typeof content === "object" && content.dir) mkdirSync(p, { recursive: true });
     else writeFileSync(p, content);
   }
