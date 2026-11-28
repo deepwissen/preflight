@@ -4,6 +4,7 @@ import { join, dirname, relative, resolve } from "node:path";
 import { extractSkillScope, type SkillScope } from "@deepwissen/preflight-core";
 import { findSkillFiles, findContextFiles, contextKind } from "./discover.js";
 import { relPosix } from "./paths.js";
+import { checkAcceptance, type Acceptance } from "./accept.js";
 import { scanSkill, scanInstruction, scanMcpConfig, type Finding } from "./scan.js";
 import { enumerateBundle, type Bundle } from "./bundle.js";
 import { scanSettings } from "./hooks.js";
@@ -170,11 +171,27 @@ export interface LocatedFinding {
   severity: Finding["severity"];
   message: string;
   line?: number;
+  accepted?: string; // reason, when a .preflight/accepted.json entry suppresses it from the gate
+  acceptStale?: boolean; // an acceptance existed but the file changed — fires + "re-review"
+}
+
+/** Context for honoring `.preflight/accepted.json` (read from the project root only). */
+export interface AcceptCtx {
+  acceptances: Acceptance[];
+  projectRoot: string;
 }
 
 /** Every finding across the report, each with a repo-root-relative path — bundled
  *  scripts are re-rooted from skill-dir-relative to repo-relative for reporting. */
-export function reportFindings(report: ManifestReport): LocatedFinding[] {
+export function reportFindings(report: ManifestReport, accept?: AcceptCtx): LocatedFinding[] {
+  const annotate = (f: LocatedFinding): LocatedFinding => {
+    if (!accept || accept.acceptances.length === 0) return f;
+    const abs = f.file.startsWith("~/") ? join(homedir(), f.file.slice(2)) : join(accept.projectRoot, f.file);
+    const v = checkAcceptance(f.rule, f.file, abs, accept.acceptances);
+    if (v?.status === "accepted") return { ...f, accepted: v.reason };
+    if (v?.status === "stale") return { ...f, acceptStale: true };
+    return f;
+  };
   const out: LocatedFinding[] = [];
   for (const r of report.rows) {
     // Under --all, a user-scope path is relative to ~/.claude and otherwise looks
@@ -182,22 +199,22 @@ export function reportFindings(report: ManifestReport): LocatedFinding[] {
     // SARIF consumers can tell personal skills from committed ones.
     const prefix = r.origin === "user" ? "~/.claude/" : "";
     for (const f of r.findings) {
-      out.push({ file: prefix + r.path, rule: f.rule, severity: f.severity, message: f.message, line: f.line });
+      out.push(annotate({ file: prefix + r.path, rule: f.rule, severity: f.severity, message: f.message, line: f.line }));
     }
     const dir = dirname(r.path);
     for (const sc of r.bundle.scripts) {
       const uri = prefix + (dir === "." ? sc.path : `${dir}/${sc.path}`);
       for (const f of sc.findings) {
-        out.push({ file: uri, rule: f.rule, severity: f.severity, message: f.message, line: f.line });
+        out.push(annotate({ file: uri, rule: f.rule, severity: f.severity, message: f.message, line: f.line }));
       }
     }
   }
   for (const c of report.contextFiles) {
     for (const f of c.findings) {
-      out.push({ file: c.path, rule: f.rule, severity: f.severity, message: f.message, line: f.line });
+      out.push(annotate({ file: c.path, rule: f.rule, severity: f.severity, message: f.message, line: f.line }));
     }
   }
-  out.push(...report.settingsRisks);
+  out.push(...report.settingsRisks.map(annotate));
   return out;
 }
 
@@ -295,9 +312,10 @@ export function failThreshold(failOn: FailOn): number {
 }
 
 /** Exit 1 when any finding meets/exceeds the --fail-on threshold, else 0. */
-export function exitForReport(report: ManifestReport, failOn: FailOn): number {
+export function exitForReport(report: ManifestReport, failOn: FailOn, accept?: AcceptCtx): number {
   const threshold = failThreshold(failOn);
-  return reportFindings(report).some((f) => RANK[f.severity] >= threshold) ? 1 : 0;
+  // An accepted finding (rule+file+hash match, not expired) doesn't count toward the gate.
+  return reportFindings(report, accept).some((f) => !f.accepted && RANK[f.severity] >= threshold) ? 1 : 0;
 }
 
 /** Build the agent-skill manifest for a directory (optionally skipping dirs). */

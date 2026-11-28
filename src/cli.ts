@@ -7,6 +7,7 @@ import {
   buildScopes,
   buildRow,
   exitForReport,
+  reportFindings,
   failThreshold,
   type FailOn,
   type ManifestReport,
@@ -31,7 +32,8 @@ import {
   renderPlugins,
 } from "./render.js";
 import { renderManifestSarif, renderPluginsSarif } from "./sarif.js";
-import { setColorEnabled, redBold } from "./color.js";
+import { setColorEnabled, redBold, dim } from "./color.js";
+import { loadAcceptances, ACCEPT_PATH } from "./accept.js";
 import { discoverPlugins, type PluginInfo } from "./plugins.js";
 import {
   stageSource,
@@ -213,16 +215,20 @@ function runManifest(argv: string[], out: (s: string) => void, err: (s: string) 
   }
 
   const report = buildScopes(scopesFromFlags(values, projectRoot));
+  // Scoped acceptance: read-only from the PROJECT ROOT (never staged/scanned content).
+  const accept = { acceptances: loadAcceptances(projectRoot), projectRoot };
   if (values.sarif) {
     out(renderManifestSarif(report) + "\n");
   } else if (values.json) {
     out(renderJson(report) + "\n");
   } else {
     out(renderManifest(report) + "\n");
+    const nAccepted = reportFindings(report, accept).filter((f) => f.accepted).length;
+    if (nAccepted) out(dim(`  ${nAccepted} finding(s) accepted via ${ACCEPT_PATH} (excluded from --fail-on)`) + "\n");
     const notices = crossScopeNotices(values, projectRoot, report, "manifest");
     if (notices.length) out(notices.join("\n") + "\n");
   }
-  return exitForReport(report, failOn as FailOn);
+  return exitForReport(report, failOn as FailOn, accept);
 }
 
 function runCheck(argv: string[], out: (s: string) => void, err: (s: string) => void): number {
